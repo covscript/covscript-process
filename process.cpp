@@ -103,7 +103,7 @@ public:
 class process final {
 public:
     enum class openmode {
-        read, write, readwrite
+        read, write
     };
 private:
     FILE *s = nullptr;
@@ -116,9 +116,6 @@ public:
                 break;
             case openmode::write:
                 s = popen_impl(command.c_str(), "w");
-                break;
-            case openmode::readwrite:
-                s = popen_impl(command.c_str(), "rw");
                 break;
         }
         if (s == nullptr)
@@ -152,6 +149,12 @@ CNI_ROOT_NAMESPACE {
         return cs::var::make<process_t>(std::make_shared<process>(command, mode));
     })
 
+    CNI_NAMESPACE(openmode)
+    {
+        CNI_VALUE_CONST(read, process::openmode::read)
+        CNI_VALUE_CONST(write, process::openmode::write)
+    }
+
     CNI_NAMESPACE(process)
     {
         CNI_V(get_reader, [](process_t &p){
@@ -181,6 +184,6 @@ CNI_ROOT_NAMESPACE {
     }
 }
 
-CNI_ENABLE_TYPE_EXT(process, process)
+CNI_ENABLE_TYPE_EXT_V(process, process_t, process)
 CNI_ENABLE_TYPE_EXT_V(stream_reader, classic_stream_reader, process::stream_reader)
 CNI_ENABLE_TYPE_EXT_V(stream_writer, classic_stream_writer, process::stream_writer)
