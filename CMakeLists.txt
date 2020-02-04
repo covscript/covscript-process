@@ -33,6 +33,7 @@ else ()
 endif ()
 
 add_library(process SHARED process.cpp)
+add_executable(test-process test.cpp)
 
 target_link_libraries(process covscript)
 
