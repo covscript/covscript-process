@@ -253,12 +253,14 @@ namespace covscript_process {
                     dup2(p_stderr[pipe_write], fileno(stderr));
                 }
                 std::vector<std::string> vec = split(psi.args);
-                char *argv[vec.size()];
-                for (std::size_t i = 0; i < vec.size(); ++i)
-                    argv[i] = &vec[i][0];
-                execv(psi.file.c_str(), argv);
+                char *argv[vec.size() + 2];
+                argv[0] = const_cast<char *>(psi.file.c_str());
+                for (std::size_t i = 1; i < vec.size(); ++i)
+                    argv[i] = const_cast<char *>(vec[i].c_str());
+                argv[vec.size()] = nullptr;
+                execvp(psi.file.c_str(), argv);
                 throw std::runtime_error("Execution of subprocess failed.");
-            } else
+            } else if (pid < 0)
                 throw std::runtime_error("Creating subprocess failed.");
         }
 #endif
