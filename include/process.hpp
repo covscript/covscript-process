@@ -14,9 +14,9 @@
 
 #else
 
+#include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <wait.h>
 
 #endif
 
