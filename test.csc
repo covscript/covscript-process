@@ -1,6 +1,11 @@
 import process
-var p = process.start("cs -r -c " + context.cmd_args()[0], process.openmode.read)
-var in = p.get_reader()
+var builder = new process.builder
+builder.redirect_stdin()
+builder.redirect_stdout()
+var p = builder.start("cs", "")
+p.get_stdin().println("runtime.info();system.exit(0)")
+var in = p.get_stdout()
 while in.good() && !in.eof()
     system.out.println(in.getline())
 end
+p.wait_for_exit()
