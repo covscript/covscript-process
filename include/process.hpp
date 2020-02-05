@@ -3,6 +3,7 @@
 #ifndef NO_COVSCRIPT
 #include <covscript/core/core.hpp>
 #endif
+
 #include <streambuf>
 #include <cstring>
 #include <istream>
@@ -24,11 +25,20 @@
 #endif
 
 namespace covscript_process {
+#ifndef NO_COVSCRIPT
+	using runtime_exception = cs::lang_error;
+	using critical_exception = cs::runtime_error;
+#else
+	using runtime_exception = std::logic_error;
+	using critical_exception = std::runtime_error;
+#endif
+
 #ifdef _WIN32
 	using fd_type = HANDLE;
+
 	/**
-		 * Implementation of unix style read/write on Win32 HANDLE
-		 */
+	 * Implementation of unix style read/write on Win32 HANDLE
+	 */
 	ssize_t read(fd_type handle, void *buf, size_t count)
 	{
 		DWORD dwRead;
@@ -100,13 +110,13 @@ namespace covscript_process {
 
 	protected:
 		/**
-			 * size of putback area
-			 */
+		 * size of putback area
+		 */
 		static constexpr size_t PUTBACK_SIZE = 4;
 
 		/**
-			 * size of the data buffer
-			 */
+		 * size of the data buffer
+		 */
 		static constexpr size_t BUFFER_SIZE = 1024;
 
 		char _buffer[BUFFER_SIZE + PUTBACK_SIZE] {0};
@@ -197,10 +207,12 @@ namespace covscript_process {
 
 			process_info m_psi;
 
+			int exit_code = 0;
+
 #ifdef _WIN32
 			/**
-				 * Win32 Process Implementation
-				 */
+			 * Win32 Process Implementation
+			 */
 			STARTUPINFO si;
 			PROCESS_INFORMATION pi;
 
@@ -217,26 +229,33 @@ namespace covscript_process {
 				sa.lpSecurityDescriptor = nullptr;
 				if (m_psi.redirect_stdin) {
 					if (!CreatePipe(&p_stdin[pipe_read], &p_stdin[pipe_write], &sa, 0))
-						throw std::runtime_error("Creating pipe of stdin failed.");
+						throw critical_exception("Creating pipe of stdin failed.");
 					if (!SetHandleInformation(p_stdin[pipe_write], HANDLE_FLAG_INHERIT, 0))
-						throw std::runtime_error("Creating pipe of stdin failed.");
+						throw critical_exception("Creating pipe of stdin failed.");
 					si.hStdInput = p_stdin[pipe_read];
 				}
 				if (m_psi.redirect_stdout) {
 					if (!CreatePipe(&p_stdout[pipe_read], &p_stdout[pipe_write], &sa, 0))
-						throw std::runtime_error("Creating pipe of stdout failed.");
+						throw critical_exception("Creating pipe of stdout failed.");
 					si.hStdOutput = p_stdout[pipe_write];
 				}
 				if (m_psi.redirect_stderr) {
 					if (!CreatePipe(&p_stderr[pipe_read], &p_stderr[pipe_write], &sa, 0))
-						throw std::runtime_error("Creating pipe of stderr failed.");
+						throw critical_exception("Creating pipe of stderr failed.");
 					si.hStdError = p_stderr[pipe_write];
 				}
 				ZeroMemory(&pi, sizeof(pi));
 				std::string command = m_psi.file + " " + m_psi.args;
-				if (!CreateProcess(nullptr, const_cast<char *>(command.c_str()), nullptr, nullptr, true, 0, nullptr,
+				if (!CreateProcess(nullptr, const_cast<char *>(command.c_str()), nullptr, nullptr, true,
+				                   CREATE_NO_WINDOW, nullptr,
 				                   m_psi.dir.c_str(), &si, &pi))
-					throw std::runtime_error("Creating subprocess failed.");
+					throw runtime_exception("Creating subprocess failed.");
+				if (m_psi.redirect_stdin)
+					CloseHandle(p_stdin[pipe_read]);
+				if (m_psi.redirect_stdout)
+					CloseHandle(p_stdout[pipe_write]);
+				if (m_psi.redirect_stderr)
+					CloseHandle(p_stderr[pipe_write]);
 			}
 
 			~system_process()
@@ -257,14 +276,23 @@ namespace covscript_process {
 				}
 			}
 
-			void wait_for_exit()
+			bool has_exited()
+			{
+				return !WaitForSingleObject(pi.hProcess, 0);
+			}
+
+			int wait_for_exit()
 			{
 				WaitForSingleObject(pi.hProcess, INFINITE);
+				DWORD ec;
+				GetExitCodeProcess(pi.hProcess, &ec);
+				return exit_code = ec;
 			}
+
 #else
 			/**
-				 * Unix Process Implementation
-				 */
+			 * Unix Process Implementation
+			 */
 			pid_t pid;
 
 			std::vector<std::string> split(const std::string &str)
@@ -289,18 +317,18 @@ namespace covscript_process {
 			void set_cloexec(int fd)
 			{
 				if (fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC) == -1)
-					throw std::runtime_error("Error setting FD_CLOEXEC flag.");
+					throw critical_exception("Error setting FD_CLOEXEC flag.");
 			}
 
 		public:
 			explicit system_process(process_info psi) : m_psi(std::move(psi))
 			{
 				if (m_psi.redirect_stdin && pipe(p_stdin) != 0)
-					throw std::runtime_error("Creating pipe of stdin failed.");
+					throw critical_exception("Creating pipe of stdin failed.");
 				if (m_psi.redirect_stdout && pipe(p_stdout) != 0)
-					throw std::runtime_error("Creating pipe of stdout failed.");
+					throw critical_exception("Creating pipe of stdout failed.");
 				if (m_psi.redirect_stderr && pipe(p_stderr) != 0)
-					throw std::runtime_error("Creating pipe of stderr failed.");
+					throw critical_exception("Creating pipe of stderr failed.");
 				pid = fork();
 				if (pid == 0) {
 					if (m_psi.redirect_stdin) {
@@ -325,12 +353,12 @@ namespace covscript_process {
 						argv[i + 1] = const_cast<char *>(vec[i].c_str());
 					argv[vec.size() + 1] = nullptr;
 					if (chdir(m_psi.dir.c_str()) == -1)
-						throw std::runtime_error("Change workding dir failed.");
+						throw runtime_exception("Change workding dir failed.");
 					execvp(m_psi.file.c_str(), argv);
-					throw std::runtime_error("Execution of subprocess failed.");
+					throw runtime_exception("Execution of subprocess failed.");
 				}
 				else if (pid < 0)
-					throw std::runtime_error("Creating subprocess failed.");
+					throw runtime_exception("Creating subprocess failed.");
 				if (m_psi.redirect_stdin) {
 					close(p_stdin[pipe_read]);
 					set_cloexec(p_stdin[pipe_write]);
@@ -355,16 +383,31 @@ namespace covscript_process {
 					close(p_stderr[pipe_read]);
 			}
 
-			void wait_for_exit()
+			bool has_exited()
+			{
+				return waitpid(pid, nullptr, WNOHANG);
+			}
+
+			int wait_for_exit()
 			{
 				int status;
 				waitpid(pid, &status, 0);
+				if (WIFEXITED(status))
+					return exit_code = WEXITSTATUS(status);
 			}
 #endif
+
+			int get_exit_code()
+			{
+				if (!has_exited())
+					throw runtime_exception("Process not exited yet.");
+				return exit_code;
+			}
+
 			std::ostream &get_stdin()
 			{
 				if (!m_psi.redirect_stdin)
-					throw std::runtime_error("No redirection on stdin.");
+					throw runtime_exception("No redirection on stdin.");
 				if (!fd_stdin)
 					fd_stdin = std::make_unique<fdostream>(p_stdin[pipe_write]);
 				return *fd_stdin;
@@ -373,7 +416,7 @@ namespace covscript_process {
 			std::istream &get_stdout()
 			{
 				if (!m_psi.redirect_stdout)
-					throw std::runtime_error("No redirection on stdout.");
+					throw runtime_exception("No redirection on stdout.");
 				if (!fd_stdout)
 					fd_stdout = std::make_unique<fdistream>(p_stdout[pipe_read]);
 				return *fd_stdout;
@@ -382,7 +425,7 @@ namespace covscript_process {
 			std::istream &get_stderr()
 			{
 				if (!m_psi.redirect_stderr)
-					throw std::runtime_error("No redirection on stderr.");
+					throw runtime_exception("No redirection on stderr.");
 				if (!fd_stderr)
 					fd_stderr = std::make_unique<fdistream>(p_stderr[pipe_read]);
 				return *fd_stderr;
@@ -414,22 +457,33 @@ namespace covscript_process {
 #ifndef NO_COVSCRIPT
 		cs::ostream get_cs_stdin() const
 		{
-			return cs::ostream(&process->get_stdin(), [](std::ostream *){});
+			return cs::ostream(&process->get_stdin(), [](std::ostream *) {});
 		}
 
 		cs::istream get_cs_stdout() const
 		{
-			return cs::istream(&process->get_stdout(), [](std::istream *){});
+			return cs::istream(&process->get_stdout(), [](std::istream *) {});
 		}
 
 		cs::istream get_cs_stderr() const
 		{
-			return cs::istream(&process->get_stderr(), [](std::istream *){});
+			return cs::istream(&process->get_stderr(), [](std::istream *) {});
 		}
 #endif
-		void wait_for_exit() const
+
+		bool has_exited() const
 		{
-			process->wait_for_exit();
+			return process->has_exited();
+		}
+
+		int wait_for_exit() const
+		{
+			return process->wait_for_exit();
+		}
+
+		int get_exit_code() const
+		{
+			return process->get_exit_code();
 		}
 	};
 
@@ -464,4 +518,4 @@ namespace covscript_process {
 			return process_t(psi);
 		}
 	};
-}
+} // namespace covscript_process
