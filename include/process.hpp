@@ -188,6 +188,12 @@ namespace covscript_process {
 
 		explicit process(process_info __psi) : psi(std::move(__psi))
 		{
+			
+		}
+
+public:
+		void fucker()
+		{
 			ZeroMemory(&si, sizeof(si));
 			si.cb = sizeof(si);
 			if (psi.redirect_stdin || psi.redirect_stdout || psi.redirect_stderr)
