@@ -8,6 +8,7 @@ int main()
     process_builder builder;
     builder.redirect_stdin().redirect_stdout().redirect_stderr();
     auto p = builder.start("cs", "-s");
+    p.fucker();
     p.get_stdin() << "runtime.info(); system.exit(0)" << std::endl;
     while (p.get_stdout())
     {
