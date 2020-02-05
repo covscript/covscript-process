@@ -285,8 +285,10 @@ namespace covscript_process {
 			{
 				WaitForSingleObject(pi.hProcess, INFINITE);
 				DWORD ec;
-				GetExitCodeProcess(pi.hProcess, &ec);
-				return exit_code = ec;
+				if (GetExitCodeProcess(pi.hProcess, &ec))
+					return exit_code = ec;
+				else
+					return -1;
 			}
 
 #else
@@ -394,6 +396,8 @@ namespace covscript_process {
 				waitpid(pid, &status, 0);
 				if (WIFEXITED(status))
 					return exit_code = WEXITSTATUS(status);
+				else
+					return -1;
 			}
 #endif
 
