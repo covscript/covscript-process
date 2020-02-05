@@ -1,3 +1,4 @@
+#define NO_COVSCRIPT
 #include <process.hpp>
 #include <iostream>
 
@@ -6,7 +7,9 @@ using namespace covscript_process;
 int main()
 {
     process_builder builder;
-    builder.redirect_stdin().redirect_stdout().redirect_stderr();
+    builder.redirect_stdin(true);
+    builder.redirect_stdout(true);
+    builder.redirect_stderr(true);
     auto p = builder.start("cs", "-s");
     p.get_stdin() << "runtime.info(); system.exit(0)" << std::endl;
     while (p.get_stdout())
