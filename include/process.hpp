@@ -250,54 +250,59 @@ namespace covscript_process {
 
 		explicit process(process_info __psi) : psi(std::move(__psi))
 		{
-			if (psi.redirect_stdin && pipe(p_stdin) != 0)
-				throw std::runtime_error("Creating pipe of stdin failed.");
-			if (psi.redirect_stdout && pipe(p_stdout) != 0)
-				throw std::runtime_error("Creating pipe of stdout failed.");
-			if (psi.redirect_stderr && pipe(p_stderr) != 0)
-				throw std::runtime_error("Creating pipe of stderr failed.");
-			pid = fork();
-			if (pid == 0) {
-				if (psi.redirect_stdin) {
-					close(p_stdin[pipe_write]);
-					dup2(p_stdin[pipe_read], fileno(stdin));
-					close(p_stdin[pipe_read]);
-				}
-				if (psi.redirect_stdout) {
-					close(p_stdout[pipe_read]);
-					dup2(p_stdout[pipe_write], fileno(stdout));
-					close(p_stdout[pipe_write]);
-				}
-				if (psi.redirect_stderr) {
-					close(p_stderr[pipe_read]);
-					dup2(p_stderr[pipe_write], fileno(stderr));
-					close(p_stderr[pipe_write]);
-				}
-				std::vector<std::string> vec = split(psi.args);
-				char *argv[vec.size() + 2];
-				argv[0] = const_cast<char *>(psi.file.c_str());
-				for (std::size_t i = 0; i < vec.size(); ++i)
-					argv[i + 1] = const_cast<char *>(vec[i].c_str());
-				argv[vec.size() + 1] = nullptr;
-				if (chdir(psi.dir.c_str()) == -1)
-					throw std::runtime_error("Change workding dir failed.");
-				execvp(psi.file.c_str(), argv);
-				throw std::runtime_error("Execution of subprocess failed.");
-			}
-			else if (pid < 0)
-				throw std::runtime_error("Creating subprocess failed.");
-			if (psi.redirect_stdin) {
-				close(p_stdin[pipe_read]);
-				set_cloexec(p_stdin[pipe_write]);
-			}
-			if (psi.redirect_stdout) {
-				close(p_stdout[pipe_write]);
-				set_cloexec(p_stdout[pipe_read]);
-			}
-			if (psi.redirect_stderr) {
-				close(p_stderr[pipe_write]);
-				set_cloexec(p_stderr[pipe_read]);
-			}
+
+		}
+
+	public:
+		void fucker() {
+            if (psi.redirect_stdin && pipe(p_stdin) != 0)
+                throw std::runtime_error("Creating pipe of stdin failed.");
+            if (psi.redirect_stdout && pipe(p_stdout) != 0)
+                throw std::runtime_error("Creating pipe of stdout failed.");
+            if (psi.redirect_stderr && pipe(p_stderr) != 0)
+                throw std::runtime_error("Creating pipe of stderr failed.");
+            pid = fork();
+            if (pid == 0) {
+                if (psi.redirect_stdin) {
+                    close(p_stdin[pipe_write]);
+                    dup2(p_stdin[pipe_read], STDIN_FILENO);
+                    close(p_stdin[pipe_read]);
+                }
+                if (psi.redirect_stdout) {
+                    close(p_stdout[pipe_read]);
+                    dup2(p_stdout[pipe_write], STDOUT_FILENO);
+                    close(p_stdout[pipe_write]);
+                }
+                if (psi.redirect_stderr) {
+                    close(p_stderr[pipe_read]);
+                    dup2(p_stderr[pipe_write], STDERR_FILENO);
+                    close(p_stderr[pipe_write]);
+                }
+                std::vector<std::string> vec = split(psi.args);
+                char *argv[vec.size() + 2];
+                argv[0] = const_cast<char *>(psi.file.c_str());
+                for (std::size_t i = 0; i < vec.size(); ++i)
+                    argv[i + 1] = const_cast<char *>(vec[i].c_str());
+                argv[vec.size() + 1] = nullptr;
+                if (chdir(psi.dir.c_str()) == -1)
+                    throw std::runtime_error("Change workding dir failed.");
+                execvp(psi.file.c_str(), argv);
+                throw std::runtime_error("Execution of subprocess failed.");
+            }
+            else if (pid < 0)
+                throw std::runtime_error("Creating subprocess failed.");
+            if (psi.redirect_stdin) {
+                close(p_stdin[pipe_read]);
+                set_cloexec(p_stdin[pipe_write]);
+            }
+            if (psi.redirect_stdout) {
+                close(p_stdout[pipe_write]);
+                set_cloexec(p_stdout[pipe_read]);
+            }
+            if (psi.redirect_stderr) {
+                close(p_stderr[pipe_write]);
+                set_cloexec(p_stderr[pipe_read]);
+            }
 		}
 
 #endif

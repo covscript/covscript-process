@@ -19,6 +19,9 @@ CNI_ROOT_NAMESPACE {
 
     CNI_NAMESPACE(process)
     {
+        CNI_V(fucker, [](process_t &p) {
+            p->fucker();
+        })
         CNI_V(get_stdin, [](process_t &p){
             return cs::ostream(&p->get_stdin(), [](std::ostream *){});
         })
