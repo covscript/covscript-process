@@ -32,10 +32,10 @@ else ()
     set(CMAKE_CXX_FLAGS "-fPIC -O3")
 endif ()
 
-add_library(process SHARED process.cpp)
-add_executable(test-process test.cpp)
+add_library(libmozart src/core.cpp)
 
-target_link_libraries(process covscript)
+add_library(process SHARED src/process.cpp)
+target_link_libraries(process libmozart covscript)
 
 set_target_properties(process PROPERTIES OUTPUT_NAME process)
 set_target_properties(process PROPERTIES PREFIX "")
