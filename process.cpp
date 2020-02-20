@@ -1,29 +1,68 @@
 #include <covscript/dll.hpp>
 #include <covscript/cni.hpp>
-#include <process.hpp>
+#include <mozart++/process>
 
-using covscript_process::process_t;
-using covscript_process::process_builder;
+using process_t = std::shared_ptr<mpp::process>;
+using builder_t = mpp::process_builder;
 
 CNI_ROOT_NAMESPACE {
-	CNI_TYPE_EXT(builder, process_builder, process_builder())
-	{
-		CNI_V(redirect_stdin, &process_builder::redirect_stdin)
-		CNI_V(redirect_stdout, &process_builder::redirect_stdout)
-		CNI_V(redirect_stderr, &process_builder::redirect_stderr)
-		CNI_V(start, &process_builder::start)
-	}
+    CNI_V(exec, [](const std::string& cmd, const cs::array& args){
+        std::vector<std::string> arr;
+        for (auto &it:args)
+            arr.emplace_back(it.const_val<std::string>());
+        return std::make_shared<mpp::process>(mpp::process::exec(cmd, arr));
+    })
 
-	CNI_NAMESPACE(process)
-	{
-		CNI_V(in, &process_t::get_cs_stdin)
-		CNI_V(out, &process_t::get_cs_stdout)
-		CNI_V(err, &process_t::get_cs_stderr)
-		CNI_V(wait, &process_t::wait_for_exit)
-		CNI_V(exit_code, &process_t::get_exit_code)
-		CNI_V(has_exited, &process_t::has_exited)
+    CNI_TYPE_EXT_V(builder_type, builder_t, builder, builder_t()) {
+        CNI_V(cmd, [](const cs::var &b, const std::string &str){
+            b.val<builder_t>().command(str);
+            return b;
+        })
+        CNI_V(arg, [](const cs::var &b, const cs::array& args){
+            std::vector<std::string> arr;
+            for (auto &it:args)
+                arr.emplace_back(it.const_val<std::string>());
+            b.val<builder_t>().arguments(arr);
+            return b;
+        })
+        CNI_V(dir, [](const cs::var &b, const std::string& str){
+            b.val<builder_t>().directory(str);
+            return b;
+        })
+        CNI_V(env, [](const cs::var &b, const std::string& key, const std::string& value){
+            b.val<builder_t>().environment(key, value);
+            return b;
+        })
+        CNI_V(merge_output, [](const cs::var &b, bool r){
+            b.val<builder_t>().merge_outputs(r);
+            return b;
+        })
+        CNI_V(start, [](builder_t &b){
+            return std::make_shared<mpp::process>(b.start());
+        })
+    }
+
+	CNI_NAMESPACE(process_type) {
+	    CNI_V(in, [](const process_t& p){
+	        return cs::ostream(&p->in(), [](std::ostream *){});
+	    })
+        CNI_V(out, [](const process_t& p){
+            return cs::istream(&p->out(), [](std::istream *){});
+        })
+        CNI_V(err, [](const process_t& p){
+            return cs::istream(&p->err(), [](std::istream *){});
+        })
+        CNI_V(wait, [](const process_t &p){
+            return p->wait_for();
+        })
+        CNI_V(is_exited, [](const process_t &p){
+            return p->is_exited();
+        })
+        CNI_V(kill, [](const process_t &p, bool force){
+            return p->interrupt(force);
+        })
 	}
 }
 
-CNI_ENABLE_TYPE_EXT_V(process, process_t, process)
-CNI_ENABLE_TYPE_EXT_V(builder, process_builder, process::builder)
+CNI_ENABLE_TYPE_EXT_V(builder_type, builder_t, process_builder)
+CNI_ENABLE_TYPE_EXT_V(process_type, process_t, process)
