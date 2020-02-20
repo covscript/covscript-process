@@ -1,68 +1,77 @@
-#include <covscript/dll.hpp>
-#include <covscript/cni.hpp>
+/**
+ * Mozart++ Template Library
+ * Licensed under MIT License
+ * Copyright (c) 2020 Covariant Institute
+ * Website: https://covariant.cn/
+ * Github:  https://github.com/covariant-institute/
+ */
+
 #include <mozart++/process>
 
-using process_t = std::shared_ptr<mpp::process>;
-using builder_t = mpp::process_builder;
+namespace mpp_impl {
+    bool redirect_or_pipe(const redirect_info &r, fd_type fds[2]) {
+        if (!r.redirected()) {
+            // no redirect target specified
+            return create_pipe(fds);
+        }
 
-CNI_ROOT_NAMESPACE {
-    CNI_V(exec, [](const std::string& cmd, const cs::array& args){
-        std::vector<std::string> arr;
-        for (auto &it:args)
-            arr.emplace_back(it.const_val<std::string>());
-        return std::make_shared<mpp::process>(mpp::process::exec(cmd, arr));
-    })
-
-    CNI_TYPE_EXT_V(builder_type, builder_t, builder, builder_t()) {
-        CNI_V(cmd, [](const cs::var &b, const std::string &str){
-            b.val<builder_t>().command(str);
-            return b;
-        })
-        CNI_V(arg, [](const cs::var &b, const cs::array& args){
-            std::vector<std::string> arr;
-            for (auto &it:args)
-                arr.emplace_back(it.const_val<std::string>());
-            b.val<builder_t>().arguments(arr);
-            return b;
-        })
-        CNI_V(dir, [](const cs::var &b, const std::string& str){
-            b.val<builder_t>().directory(str);
-            return b;
-        })
-        CNI_V(env, [](const cs::var &b, const std::string& key, const std::string& value){
-            b.val<builder_t>().environment(key, value);
-            return b;
-        })
-        CNI_V(merge_output, [](const cs::var &b, bool r){
-            b.val<builder_t>().merge_outputs(r);
-            return b;
-        })
-        CNI_V(start, [](builder_t &b){
-            return std::make_shared<mpp::process>(b.start());
-        })
+        fds[PIPE_READ] = r._target;
+        fds[PIPE_WRITE] = r._target;
+        return true;
     }
 
-	CNI_NAMESPACE(process_type) {
-	    CNI_V(in, [](const process_t& p){
-	        return cs::ostream(&p->in(), [](std::ostream *){});
-	    })
-        CNI_V(out, [](const process_t& p){
-            return cs::istream(&p->out(), [](std::istream *){});
-        })
-        CNI_V(err, [](const process_t& p){
-            return cs::istream(&p->err(), [](std::istream *){});
-        })
-        CNI_V(wait, [](const process_t &p){
-            return p->wait_for();
-        })
-        CNI_V(is_exited, [](const process_t &p){
-            return p->is_exited();
-        })
-        CNI_V(kill, [](const process_t &p, bool force){
-            return p->interrupt(force);
-        })
-	}
+    void create_process(const process_startup &startup,
+                        process_info &info) {
+        fd_type pstdin[2] = {FD_INVALID, FD_INVALID};
+        fd_type pstdout[2] = {FD_INVALID, FD_INVALID};
+        fd_type pstderr[2] = {FD_INVALID, FD_INVALID};
+
+        if (!redirect_or_pipe(startup._stdin, pstdin)) {
+            mpp::throw_ex<mpp::runtime_error>("unable to bind stdin");
+        }
+
+        if (!redirect_or_pipe(startup._stdout, pstdout)) {
+            close_pipe(pstdin);
+            mpp::throw_ex<mpp::runtime_error>("unable to bind stdout");
+        }
+
+        if (!startup.merge_outputs) {
+            // if the user doesn't redirect stderr to stdout,
+            // we bind stderr to a new file descriptor
+            if (!redirect_or_pipe(startup._stderr, pstderr)) {
+                close_pipe(pstdin);
+                close_pipe(pstdout);
+                mpp::throw_ex<mpp::runtime_error>("unable to bind stderr");
+            }
+        }
+
+        try {
+            create_process_impl(startup, info, pstdin, pstdout, pstderr);
+        } catch (...) {
+            // do rollback work
+            // note: we should NOT close user provided redirect target fd,
+            // let users to close.
+            if (!startup._stdin.redirected()) {
+                close_pipe(pstdin);
+            }
+            if (!startup._stdout.redirected()) {
+                close_pipe(pstdout);
+            }
+            if (!startup._stderr.redirected()) {
+                close_pipe(pstderr);
+            }
+            throw;
+        }
+    }
 }
 
-CNI_ENABLE_TYPE_EXT_V(builder_type, builder_t, process_builder)
-CNI_ENABLE_TYPE_EXT_V(process_type, process_t, process)
+namespace mpp {
+    process process::exec(const std::string &command) {
+        return process_builder().command(command).start();
+    }
+
+    process process::exec(const std::string &command,
+                          const std::vector<std::string> &args) {
+        return process_builder().command(command).arguments(args).start();
+    }
+}

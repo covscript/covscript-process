@@ -41,7 +41,7 @@ namespace mpp {
     using fd_type = HANDLE;
     static constexpr fd_type FD_INVALID = nullptr;
 
-    mpp::ssize_t read(fd_type handle, void *buf, size_t count) {
+    static mpp::ssize_t read(fd_type handle, void *buf, size_t count) {
         DWORD dwRead;
         if (ReadFile(handle, buf, count, &dwRead, nullptr)) {
             return dwRead;
@@ -50,7 +50,7 @@ namespace mpp {
         }
     }
 
-    mpp::ssize_t write(fd_type handle, const void *buf, size_t count) {
+    static mpp::ssize_t write(fd_type handle, const void *buf, size_t count) {
         DWORD dwWritten;
         if (WriteFile(handle, buf, count, &dwWritten, nullptr)) {
             return dwWritten;
@@ -66,7 +66,7 @@ namespace mpp {
     using ::write;
 #endif
 
-    void close_fd(fd_type &fd) {
+    static void close_fd(fd_type &fd) {
         if (fd == FD_INVALID) {
             return;
         }
@@ -81,7 +81,7 @@ namespace mpp {
     static constexpr int PIPE_READ = 0;
     static constexpr int PIPE_WRITE = 1;
 
-    bool create_pipe(fd_type fds[2]) {
+    static bool create_pipe(fd_type fds[2]) {
 #ifdef MOZART_PLATFORM_WIN32
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -93,7 +93,7 @@ namespace mpp {
 #endif
     }
 
-    void close_pipe(fd_type fds[2]) {
+    static void close_pipe(fd_type fds[2]) {
         close_fd(fds[PIPE_READ]);
         close_fd(fds[PIPE_WRITE]);
     }

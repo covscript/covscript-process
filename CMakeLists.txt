@@ -32,10 +32,16 @@ else ()
     set(CMAKE_CXX_FLAGS "-fPIC -O3")
 endif ()
 
-add_library(libmozart src/core.cpp)
+aux_source_directory(mozart++ SRCS)
+aux_source_directory(src SRCS_IMPL)
 
-add_library(process SHARED src/process.cpp)
-target_link_libraries(process libmozart covscript)
+add_library(mozart STATIC
+        ${SRCS}
+        ${SRCS_IMPL}
+        )
+
+add_library(process SHARED process.cpp)
+target_link_libraries(process mozart covscript)
 
 set_target_properties(process PROPERTIES OUTPUT_NAME process)
 set_target_properties(process PROPERTIES PREFIX "")
