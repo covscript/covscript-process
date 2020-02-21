@@ -42,25 +42,26 @@ CNI_ROOT_NAMESPACE {
         })
     }
 
-	CNI_NAMESPACE(process_type) {
-	    CNI_V(in, [](const process_t& p){
-	        return cs::ostream(&p->in(), [](std::ostream *){});
-	    })
-        CNI_V(out, [](const process_t& p){
-            return cs::istream(&p->out(), [](std::istream *){});
-        })
-        CNI_V(err, [](const process_t& p){
-            return cs::istream(&p->err(), [](std::istream *){});
-        })
-        CNI_V(wait, [](const process_t &p){
-            return p->wait_for();
-        })
-        CNI_V(is_exited, [](const process_t &p){
-            return p->is_exited();
-        })
-        CNI_V(kill, [](const process_t &p, bool force){
-            return p->interrupt(force);
-        })
+	CNI_NAMESPACE(process_type)
+	{
+		CNI_V(in, [](const process_t& p) {
+			return cs::ostream(&p->in(), [](std::ostream *) {});
+		})
+		CNI_V(out, [](const process_t& p) {
+			return cs::istream(&p->out(), [](std::istream *) {});
+		})
+		CNI_V(err, [](const process_t& p) {
+			return cs::istream(&p->err(), [](std::istream *) {});
+		})
+		CNI_V(wait, [](const process_t &p) {
+			return p->wait_for();
+		})
+		CNI_V(has_exited, [](const process_t &p) {
+			return p->has_exited();
+		})
+		CNI_V(kill, [](const process_t &p, bool force) {
+			return p->interrupt(force);
+		})
 	}
 }
 
