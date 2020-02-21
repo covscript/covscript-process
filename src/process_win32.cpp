@@ -9,6 +9,7 @@
 #ifdef MOZART_PLATFORM_WIN32
 
 #include <mozart++/process>
+
 #include <Windows.h>
 
 namespace mpp_impl {
