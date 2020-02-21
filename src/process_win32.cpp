@@ -14,9 +14,38 @@
 #include <Windows.h>
 
 namespace mpp_impl {
+    bool hasInheritFlag(HANDLE handle)
+    {
+        DWORD mask;
+        if (GetHandleInformation(handle, &mask)) {
+            return mask & HANDLE_FLAG_INHERIT;
+        }
+        return false;
+    }
+
     void create_process_impl(const process_startup &startup,
                              process_info &info,
                              fd_type *pstdin, fd_type *pstdout, fd_type *pstderr) {
+        constexpr int HANDLE_STORAGE_SIZE = 6;
+
+        HANDLE stdHandle[] = {
+            GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE),
+            pstdin[PIPE_WRITE], pstdout[PIPE_READ], pstderr[PIPE_READ]
+        };
+        bool stdInherited[] = {
+            false, false, false,
+            false, false, false
+        };
+        
+        for (int i = 0; i < HANDLE_STORAGE_SIZE; ++i)
+        {
+            if (hasInheritFlag(stdHandle[i]))
+            {
+                stdInherited[i] = true;
+                SetHandleInformation(stdHandle[i], HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+
         STARTUPINFO si;
         PROCESS_INFORMATION pi;
 
@@ -29,7 +58,7 @@ namespace mpp_impl {
         sa.bInheritHandle = true;
         sa.lpSecurityDescriptor = nullptr;
 
-        if (!SetHandleInformation(pstdin[PIPE_WRITE], HANDLE_FLAG_INHERIT, 0)) {
+        if (!SetHandleInformation(pstdin[PIPE_WRITE], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
             mpp::throw_ex<mpp::runtime_error>("unable to set handle information on stdin");
         }
 
@@ -90,16 +119,20 @@ namespace mpp_impl {
         }
 
         if (!CreateProcess(nullptr, const_cast<char *>(command.c_str()),
-                           nullptr, nullptr, true, CREATE_NO_WINDOW, envs,
+                           nullptr, nullptr, true, 0, envs,
                            startup._cwd.c_str(), &si, &pi)) {
             delete[] envs;
             mpp::throw_ex<mpp::runtime_error>("unable to fork subprocess");
         }
 
         delete[] envs;
+
         CloseHandle(pstdin[PIPE_READ]);
         CloseHandle(pstdout[PIPE_WRITE]);
         CloseHandle(pstderr[PIPE_WRITE]);
+
+        for (int i = 0; i < HANDLE_STORAGE_SIZE; ++i)
+            SetHandleInformation(stdHandle[i], HANDLE_FLAG_INHERIT, stdInherited[i] ? HANDLE_FLAG_INHERIT : 0);
 
         info._pid = pi.hProcess;
         info._tid = pi.hThread;
