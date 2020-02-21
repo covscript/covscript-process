@@ -90,8 +90,8 @@ namespace mpp {
             int _exit_code = -1;
 
             explicit member_holder(const process_info &info)
-                : _info(info), _stdin(_info._stdin),
-                  _stdout(_info._stdout), _stderr(_info._stdout) {}
+                    : _info(info), _stdin(_info._stdin),
+                      _stdout(_info._stdout), _stderr(_info._stdout) {}
 
             ~member_holder() {
                 mpp_impl::close_process(_info);
@@ -101,7 +101,7 @@ namespace mpp {
         std::unique_ptr<member_holder> _this;
 
         explicit process(const process_info &info)
-            : _this(std::make_unique<member_holder>(info)) {}
+                : _this(std::make_unique<member_holder>(info)) {}
 
     public:
         process() = delete;

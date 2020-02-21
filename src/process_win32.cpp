@@ -6,6 +6,7 @@
  * Github:  https://github.com/covariant-institute/
  */
 #include <mozart++/core>
+
 #ifdef MOZART_PLATFORM_WIN32
 
 #include <mozart++/process>
@@ -14,8 +15,8 @@
 
 namespace mpp_impl {
     void create_process_impl(const process_startup &startup,
-                              process_info &info,
-                              fd_type *pstdin, fd_type *pstdout, fd_type *pstderr) {
+                             process_info &info,
+                             fd_type *pstdin, fd_type *pstdout, fd_type *pstderr) {
         STARTUPINFO si;
         PROCESS_INFORMATION pi;
 
