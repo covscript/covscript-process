@@ -59,7 +59,7 @@ CNI_ROOT_NAMESPACE {
             return p->has_exited();
         })
         CNI_V(kill, [](const process_t &p, bool force) {
-            return p->interrupt(force);
+            p->interrupt(force);
         })
     }
 }
