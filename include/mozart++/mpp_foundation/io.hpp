@@ -1,9 +1,9 @@
 /**
  * Mozart++ Template Library: System/IO
- * Licensed under MIT License
- * Copyright (c) 2020 Covariant Institute
+ * Licensed under Apache 2.0
+ * Copyright (C) 2020-2021 Chengdu Covariant Technologies Co., LTD.
  * Website: https://covariant.cn/
- * Github:  https://github.com/covariant-institute/
+ * Github:  https://github.com/chengdu-zhirui/
  */
 #pragma once
 
@@ -41,6 +41,11 @@ namespace mpp {
     using fd_type = HANDLE;
     static constexpr fd_type FD_INVALID = nullptr;
 
+    static fd_type fileno(FILE* fp)
+    {
+        return reinterpret_cast<fd_type>(_get_osfhandle(_fileno(fp)));
+    }
+
     static mpp::ssize_t read(fd_type handle, void *buf, size_t count) {
         DWORD dwRead;
         if (ReadFile(handle, buf, count, &dwRead, nullptr)) {
@@ -62,6 +67,7 @@ namespace mpp {
 #else
     using fd_type = int;
     static constexpr fd_type FD_INVALID = -1;
+    using ::fileno;
     using ::read;
     using ::write;
 #endif
