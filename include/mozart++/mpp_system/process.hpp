@@ -102,12 +102,6 @@ namespace mpp_impl {
 	 * Return the OS-level process ID (integer PID on *nix, dwProcessId on Win32).
 	 */
 	int get_pid(const process_info &info);
-
-	/**
-	 * Send a signal to the process.
-	 * On Win32, SIGINT (2) → GenerateConsoleCtrlEvent; anything else → TerminateProcess.
-	 */
-	void send_signal(const process_info &info, int signum);
 }
 
 namespace mpp {
@@ -303,14 +297,6 @@ namespace mpp {
 		}
 
 		/**
-		 * Send an OS signal to the child process.
-		 */
-		void send_signal(int signum)
-		{
-			mpp_impl::send_signal(_this->_info, signum);
-		}
-
-		/**
 		 * Return the OS-level process ID.
 		 */
 		int pid() const
@@ -477,25 +463,6 @@ namespace mpp {
 			_startup._stderr._target = target;
 			return *this;
 		}
-
-#ifdef MOZART_PLATFORM_WIN32
-
-		process_builder &redirect_stdin(int cfd)
-		{
-			return redirect_stdin(reinterpret_cast<fd_type>(_get_osfhandle(cfd)));
-		}
-
-		process_builder &redirect_stdout(int cfd)
-		{
-			return redirect_stdout(reinterpret_cast<fd_type>(_get_osfhandle(cfd)));
-		}
-
-		process_builder &redirect_stderr(int cfd)
-		{
-			return redirect_stderr(reinterpret_cast<fd_type>(_get_osfhandle(cfd)));
-		}
-
-#endif
 
 		process_builder &directory(const std::string &cwd)
 		{

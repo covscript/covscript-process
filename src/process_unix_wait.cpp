@@ -170,11 +170,6 @@ namespace mpp_impl {
 	{
 		return static_cast<int>(info._pid);
 	}
-
-	void send_signal(const process_info &info, int signum)
-	{
-		kill(static_cast<pid_t>(info._pid), signum);
-	}
 }
 
 #endif

@@ -34,11 +34,20 @@ namespace mpp_impl {
 		sa.bInheritHandle = true;
 		sa.lpSecurityDescriptor = nullptr;
 
-		// stdin: either inherit from parent terminal or use our pipe
+		// stdin: either inherit from parent terminal, redirect from a file handle,
+		// or use a pipe.
 		if (startup.inherit_stdin) {
 			si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 		}
+		else if (startup._stdin.redirected()) {
+			// Redirected: PIPE_READ == PIPE_WRITE == the file handle.
+			// Ensure it is inheritable so the child can read from it.
+			SetHandleInformation(pstdin[PIPE_READ], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+			si.hStdInput = pstdin[PIPE_READ];
+		}
 		else {
+			// Pipe: the read end goes to the child; remove inherit from the write end
+			// (parent retains it, child must not inherit it).
 			if (!SetHandleInformation(pstdin[PIPE_WRITE], HANDLE_FLAG_INHERIT, 0)) {
 				mpp::throw_ex<mpp::runtime_error>("unable to set handle information on stdin");
 			}

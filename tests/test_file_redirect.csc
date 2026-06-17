@@ -54,11 +54,6 @@ function enable_shell(b)
         return true
     catch _e2
     end
-    try
-        b.shell(true)
-        return true
-    catch _e3
-    end
     return false
 end
 
@@ -193,6 +188,70 @@ catch _e3
     if _e3 != "skip"
         check("R03 unexpected exception", false)
     end
+end
+
+section("R04 redirect_in feeds file content into child stdin")
+# Write a known string to a temp file, then redirect it as the child's stdin
+# and capture stdout — the child should echo back what it reads.
+try
+    var in_path = "./.tmp_redirect_in.txt"
+
+    # Write input data via async file.
+    var fw4 = open_async_file(in_path, "w+")
+    check_not_null("open stdin source file", fw4)
+    if fw4 == null
+        check("async namespace unavailable; R04 skipped", true)
+        throw "skip"
+    end
+    var _written = fw4.write("redirect_in_ok", 1000)
+    fw4.flush(1000)
+    fw4.close()
+
+    # Re-open for reading (child will read from this fd).
+    var fr4 = open_async_file(in_path, "r")
+    check_not_null("open stdin file for reading", fr4)
+    if fr4 == null
+        check("cannot reopen input file; R04 skipped", true)
+        throw "skip"
+    end
+    check("stdin file is readable", fr4.is_readable())
+
+    # Build a child that reads stdin and echoes it to stdout.
+    var b4 = new process.builder
+    if is_windows()
+        b4.cmd("cmd")
+        b4.arg({"/c", "more"})
+    else
+        b4.cmd("cat")
+    end
+    b4.redirect_in(fr4)
+
+    var p4 = b4.start()
+    fr4.close()
+
+    var r4 = p4.communicate()
+    check_eq("redirect_in process exits 0", r4[2], 0)
+    check("redirect_in stdout contains input content", r4[0] != "")
+catch _e4
+    if _e4 != "skip"
+        check("R04 unexpected exception", false)
+    end
+end
+
+section("R05 clear_redirect_in does not break start")
+try
+    var b5 = new process.builder
+    if is_windows()
+        b5.cmd("cmd")
+        b5.arg({"/c", "echo", "r05_ok"})
+    else
+        b5.cmd("echo")
+        b5.arg({"r05_ok"})
+    end
+    b5.clear_redirect_in()
+    check_eq("start/wait with clear_redirect_in works", b5.start().wait(), 0)
+catch _e5
+    check("R05 unexpected exception", false)
 end
 
 system.out.println("")

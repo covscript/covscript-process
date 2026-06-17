@@ -58,11 +58,6 @@ function enable_shell(b)
         return true
     catch _e2
     end
-    try
-        b.shell(true)
-        return true
-    catch _e3
-    end
     return false
 end
 

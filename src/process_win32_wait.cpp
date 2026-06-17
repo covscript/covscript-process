@@ -53,21 +53,6 @@ namespace mpp_impl {
 	{
 		return static_cast<int>(GetProcessId(info._pid));
 	}
-
-	void send_signal(const process_info &info, int signum)
-	{
-		if (signum == 2 /* SIGINT */) {
-			if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, GetProcessId(info._pid))) {
-				// GenerateConsoleCtrlEvent fails if the child has its own console group.
-				// Fall back to termination so the caller always gets a response.
-				TerminateProcess(info._pid, static_cast<UINT>(signum));
-			}
-		}
-		else {
-			// For SIGTERM (15), SIGKILL (9), etc., forcibly terminate.
-			TerminateProcess(info._pid, static_cast<UINT>(signum));
-		}
-	}
 }
 
 #endif

@@ -239,6 +239,16 @@ CNI_ROOT_NAMESPACE {
 		CNI_V(shell_off, [](builder_t &b) {
 			b.shell(nullptr);
 		})
+		// redirect_in(file_t): redirect child stdin from a file_t opened for reading.
+		CNI_V(redirect_in, [](builder_t &b, const file_t &f) {
+			if (!f || f->closed || !f->readable)
+				mpp::throw_ex<mpp::runtime_error>("file_t is not open for reading");
+			b.redirect_stdin(f->native_fd());
+		})
+		// clear_redirect_in(): clear previously configured stdin redirect.
+		CNI_V(clear_redirect_in, [](builder_t &b) {
+			b.redirect_stdin(mpp::FD_INVALID);
+		})
 		// redirect_out(file_t): redirect child stdout to a file_t opened for writing.
 		CNI_V(redirect_out, [](builder_t &b, const file_t &f) {
 			if (!f || f->closed || !f->writable)
