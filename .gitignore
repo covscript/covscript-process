@@ -56,3 +56,6 @@ tests/gen/
 
 # macOS Files
 .DS_Store
+
+# Astyle
+*.orig

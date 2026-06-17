@@ -21,6 +21,7 @@
 #include <climits>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sched.h>
 #include <csignal>
 
 #ifdef MOZART_PLATFORM_DARWIN
@@ -39,54 +40,8 @@ extern char **environ;
 #endif
 
 namespace mpp_impl {
-	/**
-	 * We use -1 to indicate that a process is still running,
-	 * bacause the return value of a process can never be -1.
-	 */
-	static constexpr int PROCESS_STILL_ALIVE = -1;
-	static constexpr int PROCESS_POLL_FAILED = -2;
-
-	/**
-	 * Poll child process status without reaping the exitValue.
-	 * waitid() is standard on all POSIX platforms.
-	 * Note: waitid on Mac OS X 10.7 seems to be broken;
-	 * it does not return the exit status consistently.
-	 */
-	static int poll_process_status(int pid) {
-		siginfo_t info;
-		memset(&info, '\0', sizeof(info));
-
-		if (waitid(P_PID, pid, &info, WEXITED | WSTOPPED | WNOHANG | WNOWAIT) == -1) {
-			// cannot get process status at this moment
-			// return early in case of undefined behavior.
-			return PROCESS_POLL_FAILED;
-		}
-
-		switch (info.si_code) {
-		case CLD_EXITED:
-			// The child exited normally, get its exit code
-			return info.si_status;
-		case CLD_KILLED:
-		case CLD_DUMPED:
-			// The child exited because of a signal.
-			// The best value to return is 0x80 + signal number,
-			// because that is what all Unix shells do, and because
-			// it allows callers to distinguish between process exit and
-			// oricess death by signal.
-			//
-			// Breaking changes happens if we are running on solaris:
-			// the historical behaviour on Solaris is to return the
-			// original signal number, but we will ignore that!
-			return 0x80 + WTERMSIG(info.si_status);
-		case CLD_STOPPED:
-			return 0x80 + WSTOPSIG(info.si_status);
-		default:
-			// process is still alive
-			return PROCESS_STILL_ALIVE;
-		}
-	}
-
-	static bool close_all_descriptors(int from_fd, int fail_fd) {
+	static bool close_all_descriptors(int from_fd, int fail_fd)
+	{
 		DIR *dp = nullptr;
 		struct dirent64 *dirp = nullptr;
 
@@ -127,13 +82,15 @@ namespace mpp_impl {
 	 * Returns number of bytes read (normally nbyte, but may be less in
 	 * case of EOF).  In case of read errors, returns -1 and sets errno.
 	 */
-	mpp::ssize_t read_fully(int fd, void *buf, size_t nbyte) {
+	mpp::ssize_t read_fully(int fd, void *buf, size_t nbyte)
+	{
 		ssize_t remaining = nbyte;
 		while (true) {
 			ssize_t n = read(fd, buf, remaining);
 			if (n == 0) {
 				return nbyte - remaining;
-			} else if (n > 0) {
+			}
+			else if (n > 0) {
 				remaining -= n;
 				if (remaining <= 0) {
 					return nbyte;
@@ -141,10 +98,12 @@ namespace mpp_impl {
 				// We were interrupted in the middle of reading the bytes.
 				// Unlikely, but possible.
 				buf = reinterpret_cast<void *>(reinterpret_cast<char *>(buf) + n);
-			} else if (errno == EINTR) {
+			}
+			else if (errno == EINTR) {
 				// we received some strange signals, which interrupted the
 				// read system call, we just proceed to continue reading.
-			} else {
+			}
+			else {
 				return -1;
 			}
 		}
@@ -153,16 +112,19 @@ namespace mpp_impl {
 	/**
 	 * If PATH is not defined, the OS provides some default value.
 	 */
-	static const char *default_path_env() {
+	static const char *default_path_env()
+	{
 		return ":/bin:/usr/bin";
 	}
 
-	static const char *get_path_env() {
+	static const char *get_path_env()
+	{
 		const char *s = getenv("PATH");
 		return (s != nullptr) ? s : default_path_env();
 	}
 
-	static const char *const *effective_pathv() {
+	static const char *const *effective_pathv()
+	{
 		const char *path = get_path_env();
 		// it's safe to convert from size_t to int, :)
 		int count = static_cast<int>(mpp::string_ref(path).count(':')) + 1;
@@ -196,7 +158,8 @@ namespace mpp_impl {
 	 * This is a historical tradeoff.
 	 * see GNU libc documentation.
 	 */
-	static void execve_without_shebang(const char *file, const char **argv, char **envp) {
+	static void execve_without_shebang(const char *file, const char **argv, char **envp)
+	{
 		// Use the extra word of space provided for us in argv by caller.
 		const char *argv0 = argv[0];
 		const char *const *end = argv;
@@ -217,7 +180,8 @@ namespace mpp_impl {
 	 * Like execve(2), but the file is always assumed to be a shell script
 	 * and the system default shell is invoked to run it.
 	 */
-	static void execve_or_shebang(const char *file, const char **argv, char **envp) {
+	static void execve_or_shebang(const char *file, const char **argv, char **envp)
+	{
 		execve(file, const_cast<char **>(argv), envp);
 		// or the shell doesn't provide a shebang
 		if (errno == ENOEXEC) {
@@ -228,7 +192,8 @@ namespace mpp_impl {
 	/**
 	 * mpp implementation of the GNU extension execvpe()
 	 */
-	static void mpp_execvpe(const char *file, const char **argv, char **envp) {
+	static void mpp_execvpe(const char *file, const char **argv, char **envp)
+	{
 		if (envp == nullptr || envp == environ) {
 			execvp(file, const_cast<char *const *>(argv));
 			return;
@@ -242,9 +207,15 @@ namespace mpp_impl {
 		if (strchr(file, '/') != nullptr) {
 			execve_or_shebang(file, argv, envp);
 
-		} else {
+		}
+		else {
 			// We must search PATH (parent's, not child's)
 			const char *const *pathv = effective_pathv();
+
+			if (pathv == nullptr) {
+				errno = ENOMEM;
+				return;
+			}
 
 			// prepare the full space to avoid memory allocation
 			char absolute_path[PATH_MAX] = {0};
@@ -307,15 +278,18 @@ namespace mpp_impl {
 		}
 	}
 
-	static void restartable_write_error(int fail_fd, int errnum) {
+	static void restartable_write_error(int fail_fd, int errnum)
+	{
 		ssize_t result = 0;
 		do {
 			result = write(fail_fd, &errnum, sizeof(errnum));
-		} while ((result == -1) && (errno == EINTR));
+		}
+		while ((result == -1) && (errno == EINTR));
 	}
 
 	__attribute__((noreturn))
-	static void exit_with_error(int fail_fd) {
+	static void exit_with_error(int fail_fd)
+	{
 		// the child failed to exec, tell our parent.
 		int errnum = errno;
 		restartable_write_error(fail_fd, errnum);
@@ -326,70 +300,65 @@ namespace mpp_impl {
 	__attribute__((noreturn))
 	static void child_proc(const process_startup &startup, process_info &info,
 	                       fd_type *pstdin, fd_type *pstdout, fd_type *pstderr,
-	                       fd_type *pfail) {
+	                       fd_type *pfail, char **prebuilt_envp)
+	{
 		// close child side of read pipe
 		close_fd(pfail[PIPE_READ]);
 		int fail_fd = pfail[PIPE_WRITE];
 
-		if (!startup._stdin.redirected()) {
+		// Close ends the child doesn't need (for inherited streams these are FD_INVALID → no-op)
+		if (!startup.inherit_stdin && !startup._stdin.redirected()) {
 			close_fd(pstdin[PIPE_WRITE]);
 		}
-		if (!startup._stdout.redirected()) {
+		if (!startup.inherit_stdout && !startup._stdout.redirected()) {
 			close_fd(pstdout[PIPE_READ]);
 		}
 
-		dup2(pstdin[PIPE_READ], STDIN_FILENO);
-		dup2(pstdout[PIPE_WRITE], STDOUT_FILENO);
+		// Set up stdin
+		if (!startup.inherit_stdin) {
+			dup2(pstdin[PIPE_READ], STDIN_FILENO);
+		}
+
+		// Set up stdout
+		if (!startup.inherit_stdout) {
+			dup2(pstdout[PIPE_WRITE], STDOUT_FILENO);
+		}
 
 		/*
-		 * pay special attention to stderr,
-		 * there are 2 cases:
-		 *      1. redirect stderr to stdout
-		 *      2. redirect stderr to a file
+		 * pay special attention to stderr:
+		 *   1. merge: redirect stderr to wherever stdout ended up
+		 *   2. inherit_stderr: leave as-is
+		 *   3. normal: connect to its own pipe
 		 */
 		if (startup.merge_outputs) {
-			// redirect stderr to stdout
-			dup2(pstdout[PIPE_WRITE], STDERR_FILENO);
-		} else {
-			// redirect stderr to a file
+			// STDOUT_FILENO is already set up (either inherited or duped)
+			dup2(STDOUT_FILENO, STDERR_FILENO);
+		}
+		else if (!startup.inherit_stderr) {
 			if (!startup._stderr.redirected()) {
 				close_fd(pstderr[PIPE_READ]);
 			}
 			dup2(pstderr[PIPE_WRITE], STDERR_FILENO);
 		}
+		// if inherit_stderr: leave STDERR_FILENO pointing at parent's stderr
 
-		close_fd(pstdin[PIPE_READ]);
-		close_fd(pstdout[PIPE_WRITE]);
-		close_fd(pstderr[PIPE_WRITE]);
+		if (!startup.inherit_stdin)  close_fd(pstdin[PIPE_READ]);
+		if (!startup.inherit_stdout) close_fd(pstdout[PIPE_WRITE]);
+		if (!startup.inherit_stderr && !startup.merge_outputs) close_fd(pstderr[PIPE_WRITE]);
 
 		// command-line and environments
 		size_t asize = startup._cmdline.size();
-		size_t esize = startup._env.size();
 		char *argv[asize + 1];
-		char *envp[esize + 1];
 
-		// argv and envp are always terminated with a nullptr
+		// argv is always terminated with a nullptr
 		argv[asize] = nullptr;
-		envp[esize] = nullptr;
 
-		// copy command-line arguments
+		// copy command-line arguments (points into startup._cmdline, valid after fork)
 		for (std::size_t i = 0; i < asize; ++i) {
 			argv[i] = const_cast<char *>(startup._cmdline[i].c_str());
 		}
 
-		// copy environment variables
-		std::vector<std::string> envs;
-		std::stringstream buffer;
-		for (const auto &e : startup._env) {
-			buffer.str("");
-			buffer.clear();
-			buffer << e.first << "=" << e.second;
-			envs.emplace_back(buffer.str());
-		}
-
-		for (std::size_t i = 0; i < esize; ++i) {
-			envp[i] = const_cast<char *>(envs[i].c_str());
-		}
+		// prebuilt_envp was constructed by the parent before fork, no heap allocation needed here.
 
 		// close everything
 		if (!close_all_descriptors(STDERR_FILENO + 1, fail_fd)) {
@@ -423,7 +392,7 @@ namespace mpp_impl {
 		}
 
 		// run subprocess
-		mpp_execvpe(argv[0], const_cast<const char **>(argv), envp);
+		mpp_execvpe(argv[0], const_cast<const char **>(argv), prebuilt_envp);
 
 		// exec failed
 		exit_with_error(fail_fd);
@@ -431,7 +400,48 @@ namespace mpp_impl {
 	}
 
 	void create_process_impl(const process_startup &startup, process_info &info,
-	                         fd_type *pstdin, fd_type *pstdout, fd_type *pstderr) {
+	                         fd_type *pstdin, fd_type *pstdout, fd_type *pstderr)
+	{
+		// Build envp strings BEFORE fork to avoid heap allocation in the child
+		// process, where the allocator may be in an inconsistent state if the
+		// parent is multi-threaded.
+		std::vector<std::string> env_strings;
+		std::vector<char *> envp_vec;
+		char **prebuilt_envp_ptr;
+
+		if (startup._inherit_env && startup._env.empty()) {
+			// nullptr → mpp_execvpe calls execvp which inherits the parent's
+			// full environment without any copying.
+			prebuilt_envp_ptr = nullptr;
+		} else {
+			if (startup._inherit_env) {
+				// Merge: start from parent environ, then apply _env overrides.
+				// All string construction happens before fork (no heap in child).
+				std::unordered_map<std::string, std::string> merged;
+				for (char **ep = environ; ep && *ep; ++ep) {
+					std::string entry(*ep);
+					auto eq = entry.find('=');
+					if (eq != std::string::npos)
+						merged.emplace(entry.substr(0, eq), entry.substr(eq + 1));
+				}
+				for (const auto &e : startup._env)
+					merged[e.first] = e.second;
+				env_strings.reserve(merged.size());
+				for (const auto &e : merged)
+					env_strings.push_back(e.first + "=" + e.second);
+			} else {
+				// inherit_env=false: only _env (empty env block if _env is also empty).
+				env_strings.reserve(startup._env.size());
+				for (const auto &e : startup._env)
+					env_strings.push_back(e.first + "=" + e.second);
+			}
+			envp_vec.reserve(env_strings.size() + 1);
+			for (auto &s : env_strings)
+				envp_vec.push_back(const_cast<char *>(s.c_str()));
+			envp_vec.push_back(nullptr);
+			prebuilt_envp_ptr = envp_vec.data();
+		}
+
 		// the child_proc will use this pipe to
 		// tell parent whether the process has started.
 		fd_type pfail[2] = {FD_INVALID, FD_INVALID};
@@ -444,13 +454,15 @@ namespace mpp_impl {
 		if (pid < 0) {
 			mpp::throw_ex<mpp::runtime_error>("unable to fork subprocess");
 
-		} else if (pid == 0) {
+		}
+		else if (pid == 0) {
 			// in child process, pfail will be closed in child_proc
-			child_proc(startup, info, pstdin, pstdout, pstderr, pfail);
+			child_proc(startup, info, pstdin, pstdout, pstderr, pfail, prebuilt_envp_ptr);
 
 			// child never returns
 
-		} else {
+		}
+		else {
 			// in parent process
 
 			// receive exec call result form child
@@ -473,10 +485,10 @@ namespace mpp_impl {
 
 			close_fd(pfail[PIPE_READ]);
 
-			if (!startup._stdin.redirected()) {
+			if (!startup.inherit_stdin && !startup._stdin.redirected()) {
 				close_fd(pstdin[PIPE_READ]);
 			}
-			if (!startup._stdout.redirected()) {
+			if (!startup.inherit_stdout && !startup._stdout.redirected()) {
 				close_fd(pstdout[PIPE_WRITE]);
 			}
 
@@ -486,10 +498,10 @@ namespace mpp_impl {
 			 *      1. redirect stderr to stdout
 			 *      2. redirect stderr to a file
 			 */
-			if (startup.merge_outputs) {
-				// redirect stderr to stdout
-				// do nothing
-			} else {
+			if (startup.merge_outputs || startup.inherit_stdout || startup.inherit_stderr) {
+				// nothing to close on parent side
+			}
+			else {
 				// redirect stderr to a file
 				if (!startup._stderr.redirected()) {
 					close_fd(pstderr[PIPE_WRITE]);
@@ -497,102 +509,23 @@ namespace mpp_impl {
 			}
 
 			info._pid = pid;
-			info._stdin = pstdin[PIPE_WRITE];
-			info._stdout = pstdout[PIPE_READ];
-			info._stderr = pstderr[PIPE_READ];
+			info._stdin  = startup.inherit_stdin  ? FD_INVALID : pstdin[PIPE_WRITE];
+			info._stdout = startup.inherit_stdout ? FD_INVALID : pstdout[PIPE_READ];
+			info._stderr = (startup.merge_outputs || startup.inherit_stdout || startup.inherit_stderr)
+			               ? FD_INVALID : pstderr[PIPE_READ];
 
 			// on *nix systems, fork() doesn't create threads to run process
 			info._tid = FD_INVALID;
 		}
 	}
 
-	void close_process(process_info &info) {
+	void close_process(process_info &info)
+	{
 		mpp_impl::close_fd(info._stdin);
 		mpp_impl::close_fd(info._stdout);
 		mpp_impl::close_fd(info._stderr);
 	}
 
-	int wait_for(const process_info &info) {
-		while (true) {
-			int status = poll_process_status(info._pid);
-			if (status == PROCESS_STILL_ALIVE) {
-				// continue waiting
-				continue;
-
-			} else if (status == PROCESS_POLL_FAILED) {
-				switch (errno) {
-				case ECHILD:
-					// The process specified by pid does not exist
-					// or is not a child of the calling process.
-					return 0;
-				default:
-					// cannot get exit code
-					return -1;
-				}
-
-			} else {
-				// the process has exited.
-				return status;
-			}
-		}
-	}
-
-	void terminate_process(const process_info &info, bool force) {
-		kill(info._pid, force ? SIGKILL : SIGTERM);
-	}
-
-	bool process_exited(const process_info &info) {
-		// if WNOHANG was specified and one or more child(ren)
-		// specified by pid exist, but have not yet changed state,
-		// then 0 is returned. On error, -1 is returned.
-		int status = poll_process_status(info._pid);
-
-		if (status == PROCESS_POLL_FAILED) {
-			if (errno != ECHILD) {
-				// when WNOHANG was set, errno could only be ECHILD
-				mpp::throw_ex<mpp::runtime_error>("should not reach here");
-			}
-
-			// waitpid() cannot find the child process identified by pid,
-			// there are two cases of this situation depending on signal set
-			struct sigaction sa{};
-			if (sigaction(SIGCHLD, nullptr, &sa) != 0) {
-				// only happens when kernel bug
-				mpp::throw_ex<mpp::runtime_error>("should not reach here");
-			}
-
-#if defined(MOZART_PLATFORM_DARWIN)
-			void *handler = reinterpret_cast<void *>(sa.__sigaction_u.__sa_handler);
-#elif defined(MOZART_PLATFORM_LINUX)
-			void *handler = reinterpret_cast<void *>(sa.sa_handler);
-#endif
-
-			if (handler == reinterpret_cast<void *>(SIG_IGN)) {
-				// in this situation we cannot check whether
-				// a child process has exited in normal way, because
-				// the child process is not belong to us any more, and
-				// the kernel will move its owner to init without notifying us.
-				// so we will try the fallback method.
-				std::string path = std::string("/proc/") + std::to_string(info._pid);
-				struct stat buf{};
-
-				// when /proc/<pid> doesn't exist, the process has exited.
-				// there will be race conditions: our process exited and
-				// another process started with the same pid.
-				// to eliminate this case, we should check /proc/<pid>/cmdline
-				// but it's too complex and not always reliable.
-				return stat(path.c_str(), &buf) == -1 && errno == ENOENT;
-
-			} else {
-				// we didn't set SIG_IGN for SIGCHLD
-				// there is only one case here theoretically:
-				// the child has exited too early before we checked it.
-				return true;
-			}
-		}
-
-		return status != PROCESS_STILL_ALIVE;
-	}
 }
 
 #endif
