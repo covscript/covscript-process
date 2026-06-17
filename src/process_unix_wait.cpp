@@ -92,6 +92,15 @@ namespace mpp_impl {
 		kill(info._pid, force ? SIGKILL : SIGTERM);
 	}
 
+	void terminate_process_tree(const process_info &info, bool force)
+	{
+		const int sig = force ? SIGKILL : SIGTERM;
+		// Child processes are launched into their own process group (PGID=PID),
+		// so negative PID targets the whole subtree group.
+		if (info._pid > 0)
+			kill(-info._pid, sig);
+	}
+
 	bool wait_timeout_ms(const process_info &info, int timeout_ms, int &exit_code,
 	                     int poll_interval_ms)
 	{

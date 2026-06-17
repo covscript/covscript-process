@@ -302,6 +302,9 @@ namespace mpp_impl {
 	                       fd_type *pstdin, fd_type *pstdout, fd_type *pstderr,
 	                       fd_type *pfail, char **prebuilt_envp)
 	{
+		// Put child in a dedicated process group for kill-tree semantics.
+		setpgid(0, 0);
+
 		// close child side of read pipe
 		close_fd(pfail[PIPE_READ]);
 		int fail_fd = pfail[PIPE_WRITE];
@@ -464,6 +467,9 @@ namespace mpp_impl {
 		}
 		else {
 			// in parent process
+
+			// Best-effort reinforcement of child's process-group leader role.
+			setpgid(pid, pid);
 
 			// receive exec call result form child
 			close_fd(pfail[PIPE_WRITE]);

@@ -40,3 +40,4 @@
 - Prefer minimal, targeted changes; do not rewrite unrelated docs or tests.
 - Some CMake settings are maintained by the SDK `csbuild.cmake` and may change with SDK updates; avoid duplicating or overriding them in this repo unless necessary.
 - C++ standard is currently C++17, as set by the SDK's `csbuild.cmake`. Do not change this unless necessary for compatibility with the SDK or runtime.
+- **mpp vs CNI design**: The `mpp` C++ library and the CovScript CNI surface do not need to be identical. `mpp` retains its own C++ usability (e.g. `shell(nullptr_t)`, `wait_timeout_ms()`, `begin_wait()`/`poll_wait()`/`collect_wait()`, method chaining). The CNI layer exposes only what makes sense for CovScript scripts and may omit, rename, or merge APIs. Do not blindly mirror every mpp method into CNI.

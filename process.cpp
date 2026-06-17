@@ -30,6 +30,12 @@
 #include <chrono>
 #include <thread>
 
+#ifdef MOZART_PLATFORM_WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <Windows.h>
+#endif
+
 // Cooperative-yield helper. When the host CovScript runtime supports fibers
 // (ABI >= 250908 and <covscript/fiber.hpp>-equivalent symbols are reachable
 // through the SDK headers we already include), let the current fiber yield to
@@ -59,6 +65,60 @@ static inline void cs_runtime_yield(int fallback_sleep_ms)
 		std::this_thread::sleep_for(std::chrono::milliseconds(fallback_sleep_ms));
 }
 
+struct uv_fs_op_state {
+	bool done = false;
+	int result = UV_ECANCELED;
+	bool owns_uv_file = false;
+	uv_file owned_uv_file = -1;
+};
+
+static inline void uv_fs_complete(uv_fs_t *req)
+{
+	auto *state = static_cast<uv_fs_op_state *>(req->data);
+	state->result = static_cast<int>(req->result);
+	state->done = true;
+	if (state->owns_uv_file && state->owned_uv_file >= 0) {
+		_close(static_cast<int>(state->owned_uv_file));
+		state->owned_uv_file = -1;
+		state->owns_uv_file = false;
+	}
+	uv_fs_req_cleanup(req);
+}
+
+static inline bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_t *req,
+	uv_fs_op_state &state, int deadline_ms)
+{
+	bool timed_out = false;
+	const auto deadline = std::chrono::steady_clock::now()
+		+ std::chrono::milliseconds(deadline_ms < 0 ? 0 : deadline_ms);
+
+	while (!state.done) {
+		uv_run(loop, UV_RUN_NOWAIT);
+		if (state.done) break;
+
+		if (!timed_out && deadline_ms >= 0
+			&& std::chrono::steady_clock::now() >= deadline) {
+			timed_out = true;
+			uv_cancel(reinterpret_cast<uv_req_t *>(req));
+		}
+
+		cs_runtime_yield(1);
+	}
+
+	return !timed_out;
+}
+
+static inline uv_file to_uv_file(const mpp::file_ptr &f)
+{
+#ifdef MOZART_PLATFORM_WIN32
+	return static_cast<uv_file>(_open_osfhandle(
+		reinterpret_cast<intptr_t>(f->native_fd()),
+		(f->readable && f->writable) ? _O_RDWR : (f->readable ? _O_RDONLY : _O_WRONLY)));
+#else
+	return static_cast<uv_file>(f->native_fd());
+#endif
+}
+
 using process_t = std::shared_ptr<mpp::process>;
 using builder_t = mpp::process_builder;
 using file_t = mpp::file_ptr;
@@ -73,19 +133,6 @@ CNI_ROOT_NAMESPACE {
 	})
 
 	CNI_V(shell, [](const std::string &command)
-	{
-		builder_t b;
-		b.command(command);
-#ifdef MOZART_PLATFORM_WIN32
-		b.shell("cmd");
-#else
-		b.shell("/bin/sh");
-#endif
-		return std::make_shared<mpp::process>(b.start());
-	})
-
-	// Alias for script environments where member name `shell` is not reachable.
-	CNI_V(sh, [](const std::string &command)
 	{
 		builder_t b;
 		b.command(command);
@@ -124,38 +171,97 @@ CNI_ROOT_NAMESPACE {
 		// read(size, deadline_ms): read up to size bytes at current position.
 		// Returns data string on success, empty string on EOF, null on error/timeout.
 		// deadline_ms < 0: wait indefinitely; >= 0: wait up to that many ms.
-		CNI_V(read, [](file_t &f, const cs::numeric &size,
-		const cs::numeric &deadline_ms) -> cs::var {
+		CNI_V(read, [](file_t &f, int size, int deadline_ms) -> cs::var {
 			if (!f || f->closed || !f->readable) return cs::null_pointer;
-			const int sz = static_cast<int>(size.as_integer());
-			if (sz <= 0) return cs::var::make<std::string>(std::string{});
-			const auto dl = deadline_ms.as_integer();
-			const bool infinite = (dl < 0);
-			const auto end = std::chrono::steady_clock::now()
-			                 + std::chrono::milliseconds(infinite ? 0 : dl);
-			std::vector<char> buf(sz);
-			while (true) {
-				int n = f->read_at(buf.data(), sz);
-				if (n > 0) {
-					f->read_pos += n;
-					return cs::var::make<std::string>(std::string(buf.data(), n));
+			if (size <= 0) return cs::var::make<std::string>(std::string{});
+
+			std::vector<char> buf(size);
+			uv_buf_t iov = uv_buf_init(buf.data(), size);
+			uv_fs_t req{};
+			uv_fs_op_state state{};
+			req.data = &state;
+			const uv_file ufd = to_uv_file(f);
+			if (ufd < 0) return cs::null_pointer;
+#ifdef MOZART_PLATFORM_WIN32
+			state.owns_uv_file = true;
+			state.owned_uv_file = ufd;
+#endif
+			const int submit = uv_fs_read(
+				uv_default_loop(), &req, ufd, &iov, 1,
+				static_cast<int64_t>(f->read_pos), uv_fs_complete);
+			if (submit < 0) {
+				if (state.owns_uv_file && state.owned_uv_file >= 0) {
+					_close(static_cast<int>(state.owned_uv_file));
 				}
-				if (n < 0) return cs::null_pointer;
-				// n == 0: EOF
-				return cs::var::make<std::string>(std::string{});
+				uv_fs_req_cleanup(&req);
+				return cs::null_pointer;
 			}
+			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
+				return cs::null_pointer;
+
+			const int n = state.result;
+			if (n > 0) {
+				f->read_pos += n;
+				return cs::var::make<std::string>(std::string(buf.data(), n));
+			}
+			if (n < 0) return cs::null_pointer;
+			// n == 0: EOF
+			return cs::var::make<std::string>(std::string{});
 		})
 		// write(data, deadline_ms): write data to the file.
 		// Returns bytes written or -1 on error.
-		CNI_V(write, [](file_t &f, const std::string &data,
-		const cs::numeric & /*deadline_ms*/) -> int {
+		CNI_V(write, [](file_t &f, const std::string &data, int deadline_ms) -> int {
 			if (!f || f->closed || !f->writable) return -1;
-			return f->write_bytes(data.data(), static_cast<int>(data.size()));
+
+			uv_buf_t iov = uv_buf_init(const_cast<char *>(data.data()), static_cast<unsigned int>(data.size()));
+			uv_fs_t req{};
+			uv_fs_op_state state{};
+			req.data = &state;
+			const uv_file ufd = to_uv_file(f);
+			if (ufd < 0) return -1;
+#ifdef MOZART_PLATFORM_WIN32
+			state.owns_uv_file = true;
+			state.owned_uv_file = ufd;
+#endif
+			const int submit = uv_fs_write(
+				uv_default_loop(), &req, ufd, &iov, 1,
+				-1, uv_fs_complete);
+			if (submit < 0) {
+				if (state.owns_uv_file && state.owned_uv_file >= 0) {
+					_close(static_cast<int>(state.owned_uv_file));
+				}
+				uv_fs_req_cleanup(&req);
+				return -1;
+			}
+			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
+				return -1;
+			return state.result;
 		})
 		// flush(deadline_ms): flush write buffers. Returns true on success.
-		CNI_V(flush, [](file_t &f, const cs::numeric & /*deadline_ms*/) -> bool {
+		CNI_V(flush, [](file_t &f, int deadline_ms) -> bool {
 			if (!f || f->closed || !f->writable) return false;
-			return f->flush_file();
+
+			uv_fs_t req{};
+			uv_fs_op_state state{};
+			req.data = &state;
+			const uv_file ufd = to_uv_file(f);
+			if (ufd < 0) return false;
+#ifdef MOZART_PLATFORM_WIN32
+			state.owns_uv_file = true;
+			state.owned_uv_file = ufd;
+#endif
+			const int submit = uv_fs_fsync(
+				uv_default_loop(), &req, ufd, uv_fs_complete);
+			if (submit < 0) {
+				if (state.owns_uv_file && state.owned_uv_file >= 0) {
+					_close(static_cast<int>(state.owned_uv_file));
+				}
+				uv_fs_req_cleanup(&req);
+				return false;
+			}
+			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
+				return false;
+			return state.result >= 0;
 		})
 	}
 
@@ -182,6 +288,13 @@ CNI_ROOT_NAMESPACE {
 			uv_stop(uv_default_loop());
 		})
 
+		// Restart the event loop after a stop() call.
+		// libuv resumes automatically when uv_run() is called again; this is
+		// a readability marker / future hook for pre-restart setup.
+		CNI_V(restart, []() {
+			// uv_run() can be called again after uv_stop() without extra setup.
+		})
+
 		// Open or create a file at `path` with the given `mode`.
 		// Modes: "r" (read), "w" (write/create/truncate), "a" (append),
 		//        "r+" (read+write existing), "w+" (read+write/create/truncate)
@@ -191,15 +304,7 @@ CNI_ROOT_NAMESPACE {
 			if (!f) return cs::null_pointer;
 			return cs::var::make<file_t>(f);
 		})
-
-		// Restart the event loop after a stop() call.
-		// libuv resumes automatically when uv_run() is called again; this is
-		// a readability marker / future hook for pre-restart setup.
-		CNI_V(restart, []() {
-			// uv_run() can be called again after uv_stop() without extra setup.
-		})
 	}
-	CNI_NAMESPACE_ALIAS(async, aio)
 
 	CNI_TYPE_EXT_V(builder_type, builder_t, builder, builder_t())
 	{
@@ -227,17 +332,9 @@ CNI_ROOT_NAMESPACE {
 		CNI_V(inherit_env, [](builder_t &b, bool v) {
 			b.inherit_env(v);
 		})
-		// shell(string): enable shell mode with an explicit shell program.
-		CNI_V(shell, [](builder_t &b, const std::string &program) {
-			b.shell(program);
-		})
 		// Alias for script environments where member name `shell` is not reachable.
 		CNI_V(use_shell, [](builder_t &b, const std::string &program) {
 			b.shell(program);
-		})
-		// shell_off(): disable shell mode.
-		CNI_V(shell_off, [](builder_t &b) {
-			b.shell(nullptr);
 		})
 		// redirect_in(file_t): redirect child stdin from a file_t opened for reading.
 		CNI_V(redirect_in, [](builder_t &b, const file_t &f) {
@@ -245,29 +342,17 @@ CNI_ROOT_NAMESPACE {
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for reading");
 			b.redirect_stdin(f->native_fd());
 		})
-		// clear_redirect_in(): clear previously configured stdin redirect.
-		CNI_V(clear_redirect_in, [](builder_t &b) {
-			b.redirect_stdin(mpp::FD_INVALID);
-		})
 		// redirect_out(file_t): redirect child stdout to a file_t opened for writing.
 		CNI_V(redirect_out, [](builder_t &b, const file_t &f) {
 			if (!f || f->closed || !f->writable)
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for writing");
 			b.redirect_stdout(f->native_fd());
 		})
-		// clear_redirect_out(): clear previously configured stdout redirect.
-		CNI_V(clear_redirect_out, [](builder_t &b) {
-			b.redirect_stdout(mpp::FD_INVALID);
-		})
 		// redirect_err(file_t): redirect child stderr to a file_t opened for writing.
 		CNI_V(redirect_err, [](builder_t &b, const file_t &f) {
 			if (!f || f->closed || !f->writable)
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for writing");
 			b.redirect_stderr(f->native_fd());
-		})
-		// clear_redirect_err(): clear previously configured stderr redirect.
-		CNI_V(clear_redirect_err, [](builder_t &b) {
-			b.redirect_stderr(mpp::FD_INVALID);
 		})
 		CNI_V(start, [](builder_t &b) {
 			return std::make_shared<mpp::process>(b.start());
@@ -309,19 +394,17 @@ CNI_ROOT_NAMESPACE {
 			}
 			return cs::null_pointer;
 		})
-		CNI_V(wait_poll, [](const process_t &p, const cs::numeric &timeout_ms,
-		const cs::numeric &poll_interval_ms) -> cs::var {
+		CNI_V(wait_poll, [](const process_t &p, long long timeout_ms, int poll_interval_ms) -> cs::var {
 			// Launch the async waiter once so every subsequent poll_wait() call is
 			// a zero-syscall future status check (mutex only).
 			p->begin_wait();
-			const auto timeout = timeout_ms.as_integer();
-			const int interval = std::max(1, static_cast<int>(poll_interval_ms.as_integer()));
+			const int interval = std::max(1, poll_interval_ms);
 			// Already done (e.g. second call after process exited).
 			if (p->poll_wait())
 			{
 				return cs::var::make<cs::numeric>(p->collect_wait());
 			}
-			if (timeout < 0)
+			if (timeout_ms < 0)
 			{
 				// Indefinite: poll until the future is ready.
 				while (!p->poll_wait())
@@ -329,7 +412,7 @@ CNI_ROOT_NAMESPACE {
 				return cs::var::make<cs::numeric>(p->collect_wait());
 			}
 			const auto deadline = std::chrono::steady_clock::now()
-			                      + std::chrono::milliseconds(timeout);
+			                      + std::chrono::milliseconds(timeout_ms);
 			while (std::chrono::steady_clock::now() < deadline)
 			{
 				cs_runtime_yield(interval);
@@ -345,15 +428,14 @@ CNI_ROOT_NAMESPACE {
 		// in lieu of cs_runtime_yield(). The callback is responsible for any
 		// yielding or sleeping. timeout_ms < 0 polls indefinitely.
 		// begin_wait() is called first so poll_wait() iterations are syscall-free.
-		CNI_V(wait_with, [](const process_t &p, const cs::numeric &timeout_ms,
+		CNI_V(wait_with, [](const process_t &p, long long timeout_ms,
 		const cs::var &on_wait) -> cs::var {
 			p->begin_wait();
-			const auto timeout = timeout_ms.as_integer();
 			if (p->poll_wait())
 			{
 				return cs::var::make<cs::numeric>(p->collect_wait());
 			}
-			if (timeout < 0)
+			if (timeout_ms < 0)
 			{
 				// Indefinite: drive the callback loop until the future is ready.
 				while (!p->poll_wait())
@@ -361,7 +443,7 @@ CNI_ROOT_NAMESPACE {
 				return cs::var::make<cs::numeric>(p->collect_wait());
 			}
 			const auto deadline = std::chrono::steady_clock::now()
-			                      + std::chrono::milliseconds(timeout);
+			                      + std::chrono::milliseconds(timeout_ms);
 			while (std::chrono::steady_clock::now() < deadline)
 			{
 				cs::invoke(on_wait);
@@ -383,11 +465,11 @@ CNI_ROOT_NAMESPACE {
 			return p->has_exited();
 		})
 		// wait_for(ms) -> bool: wait up to ms milliseconds; true if exited.
-		CNI_V(wait_for, [](const process_t &p, const cs::numeric &ms) -> bool {
+		CNI_V(wait_for, [](const process_t &p, long long ms) -> bool {
 			p->begin_wait();
 			if (p->poll_wait()) return true;
 			const auto deadline = std::chrono::steady_clock::now()
-			                      + std::chrono::milliseconds(ms.as_integer());
+			                      + std::chrono::milliseconds(ms);
 			while (std::chrono::steady_clock::now() < deadline) {
 				cs_runtime_yield(5);
 				if (p->poll_wait()) return true;
@@ -396,11 +478,11 @@ CNI_ROOT_NAMESPACE {
 		})
 		// wait_until(deadline_ms) -> bool: wait until system-clock ms timestamp.
 		// Use runtime.time() + offset to compute the deadline on the script side.
-		CNI_V(wait_until, [](const process_t &p, const cs::numeric &deadline_ms) -> bool {
+		CNI_V(wait_until, [](const process_t &p, long long deadline_ms) -> bool {
 			p->begin_wait();
 			if (p->poll_wait()) return true;
 			const auto deadline = std::chrono::time_point<std::chrono::system_clock>(
-			    std::chrono::milliseconds(deadline_ms.as_integer()));
+			    std::chrono::milliseconds(deadline_ms));
 			while (std::chrono::system_clock::now() < deadline) {
 				cs_runtime_yield(5);
 				if (p->poll_wait()) return true;
@@ -409,6 +491,9 @@ CNI_ROOT_NAMESPACE {
 		})
 		CNI_V(kill, [](const process_t &p, bool force) {
 			p->interrupt(force);
+		})
+		CNI_V(kill_tree, [](const process_t &p, bool force) {
+			p->interrupt_tree(force);
 		})
 		CNI_V(get_pid, [](const process_t &p) {
 			return p->pid();

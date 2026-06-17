@@ -55,11 +55,6 @@ function enable_shell(b)
         return true
     catch _e1
     end
-    try
-        b.shell(default_shell())
-        return true
-    catch _e2
-    end
     return false
 end
 
@@ -68,7 +63,7 @@ function make_shell(cmd)
     var b = new process.builder
     b.cmd(cmd)
     if !enable_shell(b)
-        throw "no usable shell API on process.builder"
+        throw runtime.exception("no usable shell API on process.builder")
     end
     return b
 end
@@ -86,10 +81,10 @@ function start_sleeper(seconds)
     var b = new process.builder
     if is_windows()
         b.cmd("ping -n " + (seconds + 1) + " 127.0.0.1 >nul")
-        b.shell(default_shell())
+        b.use_shell(default_shell())
     else
         b.cmd("sleep " + seconds)
-        b.shell(default_shell())
+        b.use_shell(default_shell())
     end
     return b.start()
 end
@@ -221,7 +216,7 @@ try
     var _b11 = new process.builder
     _b11.env("CSPROC_TEST_VAR", "hello42")
     _b11.cmd("echo t11")
-    _b11.shell(default_shell())
+    _b11.use_shell(default_shell())
     check_eq("process with custom env exits 0", _b11.start().wait(), 0)
 catch _e11
     check("T11 unexpected exception", false)
@@ -341,7 +336,14 @@ end
 
 # --- T21: kill_tree() (Phase 4) ---
 section("T21 kill_tree()")
-check("skipped until kill_tree lands", true)
+try
+    var _p21 = start_sleeper(30)
+    _p21.kill_tree(true)
+    var _code21 = _p21.wait()
+    check_not_null("wait() returns after kill_tree", _code21)
+catch _e21
+    check("T21 unexpected exception", false)
+end
 
 # --- T22: wait() blocks (does not busy-spin) for ~real time on Unix ---
 # Verifies P2#4 (wait_for de-busywait): elapsed wall time should approximate
@@ -461,12 +463,12 @@ catch _e27
     check("T27 unexpected exception", false)
 end
 
-# --- T28: root-level process.sh() shortcut ---
-section("T28 process.sh()")
+# --- T28: root-level process.shell() shortcut ---
+section("T28 process.shell()")
 try
-    var _p28 = process.sh("echo t28")
-    check_not_null("process.sh() returns process_t", _p28)
-    check_eq("process.sh() exit code 0", _p28.wait(), 0)
+    var _p28 = process.shell("echo t28")
+    check_not_null("process.shell() returns process_t", _p28)
+    check_eq("process.shell() exit code 0", _p28.wait(), 0)
 catch _e28
     check("T28 unexpected exception", false)
 end

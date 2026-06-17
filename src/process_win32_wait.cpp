@@ -12,6 +12,63 @@
 #include <mozart++/process>
 
 #include <Windows.h>
+#include <TlHelp32.h>
+
+#include <unordered_map>
+#include <vector>
+
+namespace {
+	void terminate_by_pid(DWORD pid)
+	{
+		if (pid == 0 || pid == GetCurrentProcessId())
+			return;
+
+		HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+		if (h == nullptr)
+			return;
+
+		TerminateProcess(h, 0);
+		CloseHandle(h);
+	}
+
+	void terminate_descendants(DWORD root_pid)
+	{
+		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+		if (snap == INVALID_HANDLE_VALUE)
+			return;
+
+		std::unordered_map<DWORD, std::vector<DWORD>> children;
+		PROCESSENTRY32 pe;
+		pe.dwSize = sizeof(pe);
+		if (Process32First(snap, &pe)) {
+			do {
+				children[pe.th32ParentProcessID].push_back(pe.th32ProcessID);
+			} while (Process32Next(snap, &pe));
+		}
+		CloseHandle(snap);
+
+		std::vector<DWORD> stack;
+		std::vector<DWORD> order;
+		auto it = children.find(root_pid);
+		if (it != children.end())
+			stack = it->second;
+
+		while (!stack.empty()) {
+			DWORD pid = stack.back();
+			stack.pop_back();
+			order.push_back(pid);
+
+			auto cit = children.find(pid);
+			if (cit != children.end()) {
+				for (auto child : cit->second)
+					stack.push_back(child);
+			}
+		}
+
+		for (auto rit = order.rbegin(); rit != order.rend(); ++rit)
+			terminate_by_pid(*rit);
+	}
+}
 
 namespace mpp_impl {
 	int wait_for(const process_info &info)
@@ -24,6 +81,15 @@ namespace mpp_impl {
 
 	void terminate_process(const process_info &info, bool force)
 	{
+		TerminateProcess(info._pid, 0);
+	}
+
+	void terminate_process_tree(const process_info &info, bool force)
+	{
+		(void)force;
+		DWORD root_pid = GetProcessId(info._pid);
+		if (root_pid != 0)
+			terminate_descendants(root_pid);
 		TerminateProcess(info._pid, 0);
 	}
 

@@ -86,6 +86,8 @@ namespace mpp_impl {
 
 	void terminate_process(const process_info &info, bool force);
 
+	void terminate_process_tree(const process_info &info, bool force);
+
 	bool process_exited(const process_info &info);
 
 	/**
@@ -294,6 +296,11 @@ namespace mpp {
 		void interrupt(bool force = false)
 		{
 			mpp_impl::terminate_process(_this->_info, force);
+		}
+
+		void interrupt_tree(bool force = false)
+		{
+			mpp_impl::terminate_process_tree(_this->_info, force);
 		}
 
 		/**
