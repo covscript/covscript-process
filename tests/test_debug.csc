@@ -1,10 +1,10 @@
 import process
 var b = new process.builder
 b.cmd("echo marker_t07")
-if system.getenv("OS") == "Windows_NT"
-	b.shell("cmd")
+if system.is_platform_windows()
+	b.use_shell("cmd")
 else
-	b.shell("/bin/sh")
+	b.use_shell("/bin/sh")
 end
 var p = b.start()
 var r = p.communicate()

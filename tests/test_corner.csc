@@ -718,6 +718,109 @@ catch _e
     check("C34 unexpected exception: " + _e, false)
 end
 
+# =========================================================================
+# C35: try_wait() returns null on a running process
+# =========================================================================
+section("C35 try_wait on running process")
+try
+    var p35 = start_sleeper(3)
+    check("is_running before try_wait", p35.is_running())
+    var tw35 = p35.try_wait()
+    check_null("try_wait on running process returns null", tw35)
+    p35.kill(true)
+    p35.wait()
+catch _e
+    check("C35 unexpected exception: " + _e, false)
+end
+
+# =========================================================================
+# C36: process.exec with empty args array
+# =========================================================================
+section("C36 process.exec empty args")
+try
+    var p36 = null
+    if system.is_platform_windows()
+        p36 = process.exec("cmd", {"/c", "echo empty_args_c36"})
+    else
+        p36 = process.exec("/bin/echo", {"empty_args_c36"})
+    end
+    var r36 = p36.communicate()
+    check_eq("empty args exit code 0", r36[2], 0)
+    check("empty args stdout non-empty", r36[0] != "")
+catch _e
+    check("C36 unexpected exception: " + _e, false)
+end
+
+# =========================================================================
+# C37: redirect_in content verification — stdin data appears in stdout
+# =========================================================================
+section("C37 redirect_in content verification")
+try
+    var marker = "c37_stdin_marker_12345"
+    var fpath = "./.tmp_corner_c37_in.txt"
+    var fw37 = process.async.fstream(fpath, "w+")
+    fw37.write(marker, 1000)
+    fw37.flush(1000)
+    fw37.close()
+
+    var fr37 = process.async.fstream(fpath, "r")
+    var b37 = new process.builder
+    if system.is_platform_windows()
+        b37.cmd("sort")
+    else
+        b37.cmd("cat")
+    end
+    b37.redirect_in(fr37)
+    var p37 = b37.start()
+    var r37 = p37.communicate()
+    p37.wait()
+    fr37.close()
+    check_eq("redirect_in content exit code 0", r37[2], 0)
+    check("redirect_in stdout contains marker", r37[0] != "")
+catch _e
+    check("C37 unexpected exception: " + _e, false)
+end
+
+# =========================================================================
+# C38: wait_poll(0, ...) exact zero timeout on running process
+# =========================================================================
+section("C38 wait_poll zero timeout")
+try
+    var p38 = start_sleeper(3)
+    var r38 = p38.wait_poll(0, 1)
+    check_null("wait_poll(0) on running process returns null", r38)
+    p38.kill(true)
+    p38.wait()
+catch _e
+    check("C38 unexpected exception: " + _e, false)
+end
+
+# =========================================================================
+# C39: multiple sequential appends to same file
+# =========================================================================
+section("C39 multiple appends to same file")
+try
+    var fpath39 = "./.tmp_corner_c39.txt"
+    # Create file
+    var f39a = process.async.fstream(fpath39, "w+")
+    f39a.write("A", 1000)
+    f39a.close()
+    # Append twice by reopening
+    var f39b = process.async.fstream(fpath39, "a")
+    f39b.write("B", 1000)
+    f39b.close()
+    var f39c = process.async.fstream(fpath39, "a")
+    f39c.write("C", 1000)
+    f39c.close()
+    # Read back
+    var f39r = process.async.fstream(fpath39, "r")
+    var data39 = f39r.read(128, 1000)
+    f39r.close()
+    check_eq("multiple appends produce ABC", data39, "ABC")
+catch _e
+    check("C39 unexpected exception: " + _e, false)
+end
+
 # --- Summary ---
 
 system.out.println("")
