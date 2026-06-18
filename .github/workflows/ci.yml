@@ -7,7 +7,7 @@
 #   2. Determines the covscript ref (tag from covscript/csbuild/release.txt on master, or master HEAD).
 #   3. Builds covscript from source (SDK ends up in covscript/csdev/).
 #   4. Builds the extension against that SDK.
-#   5. Runs all three test suites.
+#   5. Runs all five test suites.
 #
 # Windows uses MinGW-w64 (matching local development practice).
 # Linux and macOS use Unix Makefiles with the system toolchain.
@@ -139,6 +139,9 @@ jobs:
           "$CS" -i build/imports tests/test_unit.csc
           "$CS" -i build/imports tests/test_async.csc
           "$CS" -i build/imports tests/test_file_redirect.csc
+          "$CS" -i build/imports tests/test_stream.csc
+          "$CS" -i build/imports tests/test_fiber.csc
+          "$CS" -i build/imports tests/test_corner.csc
 
       # ------------------------------------------------------------------ #
       # 6b. Run tests (Windows)                                            #
@@ -153,4 +156,10 @@ jobs:
           & $cs -i build\imports tests\test_async.csc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $cs -i build\imports tests\test_file_redirect.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_stream.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_fiber.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_corner.csc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

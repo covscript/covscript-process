@@ -6,7 +6,7 @@ CovScript 的进程扩展，基于 Mozart++ 封装跨平台的子进程创建、
 
 - `process.exec(command, args)` 直接启动子进程
 - `new process.builder` 构造可复用的进程配置对象
-- `wait()` / `try_wait()` / `wait_poll()` / `wait_with()` / `wait_for()` / `wait_until()` 等待进程结束
+- `wait()` / `try_wait()` / `wait_poll()` / `wait_with()` 等待进程结束
 - `communicate()` 同时收集 stdout / stderr，避免单管道阻塞
 - `get_pid()` / `kill()` 进程控制
 - `process.async` 事件循环能力（`poll`/`poll_once`/`stop`/`restart`）
@@ -30,9 +30,8 @@ system.out.println(p.wait())
 
 - `process.builder` 是类型，不是工厂函数
 - 应使用 `new process.builder` 创建实例
-- `shell(string)`：传入 shell 程序路径（如 `cmd` 或 `/bin/sh`）启用 shell 模式
-- `shell_off()`：关闭 shell 模式
-- `arg()` / `arguments()` 每个 builder 只能调用一次，再次调用会抛异常
+- `use_shell(program)`：传入 shell 程序路径（如 `cmd` 或 `/bin/sh`）启用 shell 模式
+- `arg()` 每个 builder 只能调用一次，再次调用会抛异常
 
 ### 快捷 shell 启动
 
@@ -113,28 +112,21 @@ cmake --build . -- -j4
 
 ### 解释器基线
 
-- 当前升级后的解释器基线：`COVSCRIPT_ABI_VERSION = 251109`
+- 当前解释器 ABI：`COVSCRIPT_ABI_VERSION = 260602`（v3.4.8）
 - 本扩展 fiber 协作分支门槛是 ABI `>= 250908`，因此在当前解释器上默认启用 fiber 兼容路径
 - 构建标准来自 SDK 的 `csbuild.cmake`（当前为 C++17）
 
 ## Test
 
-### Windows full test
-
-```powershell
-cs -i .\build\imports .\test_unit.csc
-cs -i .\build\imports .\test_async.csc
-cs -i .\build\imports .\test_file_redirect.csc
-```
-
-### Linux smoke tests
+CI 运行以下全部测试套件（Windows 使用 `cs.exe`，Linux/macOS 使用 `cs`）：
 
 ```bash
-cs -i ./build/imports ./test_linux_smoke.csc
-cs -i ./build/imports ./test_linux_exec.csc
-cs -i ./build/imports ./test.csc
-cs -i ./build/imports ./test_async.csc
-cs -i ./build/imports ./test_file_redirect.csc
+cs -i ./build/imports tests/test_unit.csc
+cs -i ./build/imports tests/test_async.csc
+cs -i ./build/imports tests/test_file_redirect.csc
+cs -i ./build/imports tests/test_stream.csc
+cs -i ./build/imports tests/test_fiber.csc
+cs -i ./build/imports tests/test_corner.csc
 ```
 
 ## Project Layout
@@ -143,19 +135,24 @@ cs -i ./build/imports ./test_file_redirect.csc
 - `src/process.cpp`：平台无关的进程创建胶水层
 - `src/process_win32.cpp`：Windows 进程实现
 - `src/process_unix.cpp`：Unix / Linux 进程实现
+- `src/process_win32_wait.cpp` / `src/process_unix_wait.cpp`：平台等待/终止实现
 - `include/mozart++/mpp_system/process.hpp`：公共 API 与 builder / process 类型定义
-- `test_unit.csc`：主回归测试（含 wait_with/wait_until）
-- `test_async.csc`：事件循环与异步文件 I/O 回归
-- `test_file_redirect.csc`：file_t 重定向回归
-- `test_linux_smoke.csc` / `test_linux_exec.csc`：Linux 冒烟验证
+- `include/mozart++/mpp_system/file.hpp`：跨平台文件句柄封装
+- `tests/test_unit.csc`：主回归测试（T01-T37）
+- `tests/test_async.csc`：事件循环与异步文件 I/O（A01-A05）
+- `tests/test_file_redirect.csc`：file_t 重定向（R01-R02）
+- `tests/test_stream.csc`：file_t stream 访问器（S01-S10）
+- `tests/test_fiber.csc`：协程协作路径（F01-F06）
+- `tests/test_corner.csc`：边界情况测试（C01-C34）
 
 ## Known Constraints
 
-- `builder.shell(...)` 内部会把 `cmd()` + `arg()` 拼接成一条 shell 命令串，shell 元字符会被重新解释；需要精确参数语义时，优先使用非 shell 模式（`shell_off()`）
+- `builder.use_shell(...)` 内部会把 `cmd()` + `arg()` 拼接成一条 shell 命令串，shell 元字符会被重新解释；需要精确参数语义时，直接使用 `cmd()` + `arg()` 而不调用 `use_shell()`
 
 - 兼容提示：请统一通过 `import process` 使用本扩展，避免与解释器内置 `process` 冲突。
-- 非 shell 模式（直接 `cmd()` + `arg()`，且 `shell_off()`）下，Windows 按 MSVCRT 标准规则转义参数；Unix 端 fork+exec 直接接收 argv
+- 非 shell 模式（直接 `cmd()` + `arg()`，不调用 `use_shell()`）下，Windows 按 MSVCRT 标准规则转义参数；Unix 端 fork+exec 直接接收 argv
 
 ## 完整 API
 
-完整 API 说明、统一语义约束与阶段性设计决策见 [API.md](API.md)。
+- **[CNI_API.md](CNI_API.md)** — CovScript 脚本层接口
+- **[CXX_API.md](CXX_API.md)** — C++ mpp 库层接口

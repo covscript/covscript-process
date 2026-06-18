@@ -392,60 +392,58 @@ catch _e23
     check("T23 unexpected exception", false)
 end
 
-# --- T24: wait_for(ms) returns true when process exits in time ---
-section("T24 wait_for() - exits in time")
+# --- T24: wait_poll() timeout returns non-null when process exits in time ---
+section("T24 wait_poll() timeout semantics")
 try
     var _p24a = make_shell("echo t24").start()
-    check("wait_for 5000ms returns true", _p24a.wait_for(5000))
-    check("has_exited() after wait_for true", _p24a.has_exited())
+    check_not_null("wait_poll 5000ms on quick process", _p24a.wait_poll(5000, 5))
+    check("has_exited() after wait_poll", _p24a.has_exited())
 catch _e24a
     check("T24a unexpected exception", false)
 end
 
-# wait_for on a slow process should time out and return false
+# wait_poll with short timeout on slow process -> returns null (timeout)
 try
     var _p24b = start_sleeper(3)
-    check("wait_for 50ms on slow process returns false", !(_p24b.wait_for(50)))
+    check_null("wait_poll 50ms on slow process returns null", _p24b.wait_poll(50, 5))
     _p24b.kill(true)
     _p24b.wait()
 catch _e24b
     check("T24b unexpected exception", false)
 end
 
-# --- T25: wait_until(deadline_ms) ---
-section("T25 wait_until() - deadline semantics")
+# --- T25: wait_poll() with absolute deadline via runtime.time() ---
+section("T25 wait_poll() deadline semantics")
 try
-    # Already-exited process: deadline far in future -> returns true.
     var _p25a = make_shell("echo t25").start()
     _p25a.wait()
-    check("wait_until past deadline on exited process", _p25a.wait_until(runtime.time() + 5000))
+    # Already-exited: deadline in the future -> returns exit code immediately.
+    check_not_null("wait_poll far deadline on exited process", _p25a.wait_poll(5000, 5))
 catch _e25a
     check("T25a unexpected exception", false)
 end
 
 try
-    # Slow process: deadline already elapsed -> returns false.
     var _p25b = start_sleeper(3)
-    check("wait_until elapsed deadline returns false", !(_p25b.wait_until(runtime.time() - 1)))
+    # Zero timeout on running process -> returns null immediately.
+    check_null("wait_poll zero timeout returns null", _p25b.wait_poll(1, 1))
     _p25b.kill(true)
     _p25b.wait()
 catch _e25b
     check("T25b unexpected exception", false)
 end
 
-# --- T26: process_t.poll() non-blocking check ---
-section("T26 process_t.poll()")
+# --- T26: process_t.has_exited() non-blocking check ---
+section("T26 has_exited() check")
 try
-    # Running process -> poll() returns false (not yet exited).
     var _p26a = start_sleeper(3)
-    check("poll() false while running", !(_p26a.poll()))
+    check("has_exited() false while running", !(_p26a.has_exited()))
     _p26a.kill(true)
     _p26a.wait()
 
-    # Exited process -> poll() returns true.
     var _p26b = make_shell("echo t26").start()
     _p26b.wait()
-    check("poll() true after exit", _p26b.poll())
+    check("has_exited() true after exit", _p26b.has_exited())
 catch _e26
     check("T26 unexpected exception", false)
 end
@@ -473,6 +471,209 @@ try
     check_eq("process.shell() exit code 0", _p28.wait(), 0)
 catch _e28
     check("T28 unexpected exception", false)
+end
+
+# --- T29: redirect_in(file_t) stdin redirection ---
+section("T29 redirect_in()")
+try
+    var _path29 = "./.tmp_redirect_in.txt"
+    var _fw29 = process.async.fstream(_path29, "w+")
+    _fw29.write("hello_stdin", 1000)
+    _fw29.flush(1000)
+    _fw29.close()
+
+    var _fr29 = process.async.fstream(_path29, "r")
+    var _b29 = new process.builder
+    _b29.redirect_in(_fr29)
+    if system.is_platform_windows()
+        _b29.cmd("sort")
+    else
+        _b29.cmd("cat")
+    end
+    _b29.use_shell(default_shell())
+    var _p29 = _b29.start()
+    var _r29 = _p29.communicate()
+    _p29.wait()
+    _fr29.close()
+    check_eq("redirect_in exit code 0", _r29[2], 0)
+    check("redirect_in stdout non-empty", _r29[0] != "")
+catch _e29
+    check("T29 unexpected exception", false)
+end
+
+# --- T30: kill(force=false) SIGTERM path ---
+section("T30 kill soft")
+try
+    var _p30 = start_sleeper(30)
+    check("is_running before soft kill", _p30.is_running())
+    _p30.kill(false)
+    _p30.wait()
+    check("has_exited after soft kill", _p30.has_exited())
+catch _e30
+    check("T30 unexpected exception", false)
+end
+
+# --- T31: inherit_env(false) isolated environment ---
+section("T31 inherit_env(false)")
+try
+    var _b31 = new process.builder
+    _b31.inherit_env(false)
+    if system.is_platform_windows()
+        # cmd.exe needs SystemRoot to function
+        _b31.env("SystemRoot", system.getenv("SystemRoot"))
+    end
+    _b31.cmd("echo t31")
+    _b31.use_shell(default_shell())
+    check_eq("inherit_env(false) exits 0", _b31.start().wait(), 0)
+catch _e31
+    check("T31 unexpected exception", false)
+end
+
+# --- T32: wait_with callback exception propagation ---
+var _ticked32 = false
+var _caught32 = false
+
+function _cb32_throw()
+    _ticked32 = true
+    throw runtime.exception("callback_abort")
+end
+
+section("T32 wait_with callback exception")
+try
+    var _p32 = start_sleeper(3)
+    try
+        _p32.wait_with(5000, _cb32_throw)
+    catch _e32cb
+        _caught32 = true
+    end
+    _p32.kill(true)
+    _p32.wait()
+    check("wait_with callback ticked", _ticked32)
+    check("wait_with callback exception propagated", _caught32)
+catch _e32
+    check("T32 unexpected exception", false)
+end
+
+# --- T33: process_t.in() / .out() / .err() stream accessors ---
+section("T33 stream accessors")
+try
+    var _b33 = new process.builder
+    _b33.cmd("echo t33_stdout")
+    _b33.use_shell(default_shell())
+    var _p33 = _b33.start()
+    check_not_null("process_t.out() returns stream", _p33.out())
+    check_not_null("process_t.err() returns stream", _p33.err())
+    check_not_null("process_t.in() returns stream", _p33.in())
+    _p33.wait()
+catch _e33
+    check("T33 unexpected exception", false)
+end
+
+# --- T34: communicate on killed process (exit code semantics) ---
+section("T34 communicate after kill")
+try
+    var _p34 = start_sleeper(30)
+    _p34.kill(true)
+    var _r34 = _p34.communicate()
+    check("communicate on killed process exit_code != 0", _r34[2] != 0)
+catch _e34
+    check("T34 unexpected exception", false)
+end
+
+# --- T35: concurrent communicate + kill robustness ---
+var _p35_holder = null
+var _r35_holder = null
+
+function _f35_body()
+    _r35_holder = _p35_holder.communicate()
+end
+
+section("T35 concurrent communicate + kill")
+try
+    var _b35 = new process.builder
+    if system.is_platform_windows()
+        _b35.cmd("echo start && ping -n 11 127.0.0.1 >nul && echo never")
+    else
+        _b35.cmd("echo start && sleep 10 && echo never")
+    end
+    _b35.use_shell(default_shell())
+    _p35_holder = _b35.start()
+    var _fib35 = fiber.create(_f35_body)
+    _fib35.resume()
+    _p35_holder.kill(true)
+    while !_fib35.is_finished()
+        _fib35.resume()
+    end
+    check("concurrent communicate+kill completed", _r35_holder != null)
+    check("concurrent communicate+kill exit_code != 0", _r35_holder[2] != 0)
+catch _e35
+    check("T35 unexpected exception", false)
+end
+
+# --- T36: merge_output(true) takes priority over redirect_err ---
+section("T36 merge_output > redirect_err")
+try
+    var _errfile36 = process.async.fstream("./.tmp_merge_redirect_err.txt", "w+")
+    check_not_null("merge+redirect: err file opened", _errfile36)
+
+    var _b36 = new process.builder
+    _b36.merge_output(true)
+    _b36.redirect_err(_errfile36)
+    if system.is_platform_windows()
+        _b36.cmd("echo out_msg && echo err_msg 1>&2")
+    else
+        _b36.cmd("echo out_msg && echo err_msg 1>&2")
+    end
+    _b36.use_shell(default_shell())
+    var _p36 = _b36.start()
+    var _r36 = _p36.communicate()
+    _p36.wait()
+
+    # merge_output takes priority: stderr merged into stdout
+    check("merge+redirect: stdout non-empty", _r36[0] != "")
+    check("merge+redirect: exit code 0", _r36[2] == 0)
+    _errfile36.close()
+
+    # redirect_err file should be empty (merge_output won)
+    var _f36r = process.async.fstream("./.tmp_merge_redirect_err.txt", "r")
+    var _data36 = _f36r.read(1024, 1000)
+    var _empty36 = _data36 == "" || _data36 == null
+    check("merge+redirect: err file empty (priority respected)", _empty36)
+    _f36r.close()
+catch _e36
+    check("T36 unexpected exception", false)
+end
+
+# --- T37: large output (>1MB) via communicate() ---
+section("T37 large output >1MB")
+try
+    # Build >1MB content and write to file in one call, then cat via shell.
+    var _s37 = ""
+    var _k37 = 0
+    while _k37 < 16384
+        _s37 += "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz_!"
+        _k37 += 1
+    end
+    var _fw37 = process.async.fstream(".tmp_large_output.txt", "w+")
+    _fw37.write(_s37, 60000)
+    _fw37.flush(60000)
+    _fw37.close()
+
+    var _b37 = new process.builder
+    if system.is_platform_windows()
+        _b37.cmd("type .tmp_large_output.txt")
+    else
+        _b37.cmd("cat .tmp_large_output.txt")
+    end
+    _b37.use_shell(default_shell())
+    var _p37 = _b37.start()
+    var _r37 = _p37.communicate()
+    _p37.wait()
+
+    check_eq("large output: exit code 0", _r37[2], 0)
+    check("large output: data received", _r37[0].size >= 1048576)
+catch _e37
+    check("T37 unexpected exception", false)
 end
 
 # --- Summary ---

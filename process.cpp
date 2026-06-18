@@ -67,8 +67,6 @@ static inline void cs_runtime_yield(int fallback_sleep_ms)
 struct uv_fs_op_state {
 	bool done = false;
 	int result = UV_ECANCELED;
-	bool owns_uv_file = false;
-	uv_file owned_uv_file = -1;
 };
 
 static inline void uv_fs_complete(uv_fs_t *req)
@@ -76,13 +74,6 @@ static inline void uv_fs_complete(uv_fs_t *req)
 	auto *state = static_cast<uv_fs_op_state *>(req->data);
 	state->result = static_cast<int>(req->result);
 	state->done = true;
-	if (state->owns_uv_file && state->owned_uv_file >= 0) {
-#ifdef MOZART_PLATFORM_WIN32
-		_close(static_cast<int>(state->owned_uv_file));
-#endif
-		state->owned_uv_file = -1;
-		state->owns_uv_file = false;
-	}
 	uv_fs_req_cleanup(req);
 }
 
@@ -112,9 +103,7 @@ static inline bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_t *req,
 static inline uv_file to_uv_file(const mpp::file_ptr &f)
 {
 #ifdef MOZART_PLATFORM_WIN32
-	return static_cast<uv_file>(_open_osfhandle(
-		reinterpret_cast<intptr_t>(f->native_fd()),
-		(f->readable && f->writable) ? _O_RDWR : (f->readable ? _O_RDONLY : _O_WRONLY)));
+	return static_cast<uv_file>(f->get_uv_fd());
 #else
 	return static_cast<uv_file>(f->native_fd());
 #endif
@@ -183,19 +172,11 @@ CNI_ROOT_NAMESPACE {
 			req.data = &state;
 			const uv_file ufd = to_uv_file(f);
 			if (ufd < 0) return cs::null_pointer;
-#ifdef MOZART_PLATFORM_WIN32
-			state.owns_uv_file = true;
-			state.owned_uv_file = ufd;
-#endif
+
 			const int submit = uv_fs_read(
 				uv_default_loop(), &req, ufd, &iov, 1,
 				static_cast<int64_t>(f->read_pos), uv_fs_complete);
 			if (submit < 0) {
-				if (state.owns_uv_file && state.owned_uv_file >= 0) {
-					#ifdef MOZART_PLATFORM_WIN32
-					_close(static_cast<int>(state.owned_uv_file));
-#endif
-				}
 				uv_fs_req_cleanup(&req);
 				return cs::null_pointer;
 			}
@@ -222,24 +203,21 @@ CNI_ROOT_NAMESPACE {
 			req.data = &state;
 			const uv_file ufd = to_uv_file(f);
 			if (ufd < 0) return -1;
-#ifdef MOZART_PLATFORM_WIN32
-			state.owns_uv_file = true;
-			state.owned_uv_file = ufd;
-#endif
+
+			// In append mode, pass -1 so the OS writes at the end of the file.
+			// Using write_pos would overwrite from position 0 instead.
+			const int64_t offset = f->append ? -1 : f->write_pos;
 			const int submit = uv_fs_write(
 				uv_default_loop(), &req, ufd, &iov, 1,
-				-1, uv_fs_complete);
+				offset, uv_fs_complete);
 			if (submit < 0) {
-				if (state.owns_uv_file && state.owned_uv_file >= 0) {
-					#ifdef MOZART_PLATFORM_WIN32
-					_close(static_cast<int>(state.owned_uv_file));
-#endif
-				}
 				uv_fs_req_cleanup(&req);
 				return -1;
 			}
 			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
 				return -1;
+			if (state.result > 0 && !f->append)
+				f->write_pos += state.result;
 			return state.result;
 		})
 		// flush(deadline_ms): flush write buffers. Returns true on success.
@@ -251,18 +229,10 @@ CNI_ROOT_NAMESPACE {
 			req.data = &state;
 			const uv_file ufd = to_uv_file(f);
 			if (ufd < 0) return false;
-#ifdef MOZART_PLATFORM_WIN32
-			state.owns_uv_file = true;
-			state.owned_uv_file = ufd;
-#endif
+
 			const int submit = uv_fs_fsync(
 				uv_default_loop(), &req, ufd, uv_fs_complete);
 			if (submit < 0) {
-				if (state.owns_uv_file && state.owned_uv_file >= 0) {
-					#ifdef MOZART_PLATFORM_WIN32
-					_close(static_cast<int>(state.owned_uv_file));
-#endif
-				}
 				uv_fs_req_cleanup(&req);
 				return false;
 			}
@@ -466,35 +436,6 @@ CNI_ROOT_NAMESPACE {
 		})
 		CNI_V(is_running, [](const process_t &p) {
 			return !p->has_exited();
-		})
-		// poll() -> bool: non-blocking exit check (API §2.5).
-		CNI_V(poll, [](const process_t &p) -> bool {
-			return p->has_exited();
-		})
-		// wait_for(ms) -> bool: wait up to ms milliseconds; true if exited.
-		CNI_V(wait_for, [](const process_t &p, long long ms) -> bool {
-			p->begin_wait();
-			if (p->poll_wait()) return true;
-			const auto deadline = std::chrono::steady_clock::now()
-			                      + std::chrono::milliseconds(ms);
-			while (std::chrono::steady_clock::now() < deadline) {
-				cs_runtime_yield(5);
-				if (p->poll_wait()) return true;
-			}
-			return false;
-		})
-		// wait_until(deadline_ms) -> bool: wait until system-clock ms timestamp.
-		// Use runtime.time() + offset to compute the deadline on the script side.
-		CNI_V(wait_until, [](const process_t &p, long long deadline_ms) -> bool {
-			p->begin_wait();
-			if (p->poll_wait()) return true;
-			const auto deadline = std::chrono::time_point<std::chrono::system_clock>(
-			    std::chrono::milliseconds(deadline_ms));
-			while (std::chrono::system_clock::now() < deadline) {
-				cs_runtime_yield(5);
-				if (p->poll_wait()) return true;
-			}
-			return false;
 		})
 		CNI_V(kill, [](const process_t &p, bool force) {
 			p->interrupt(force);

@@ -34,7 +34,7 @@ namespace {
 		if (h == nullptr)
 			return;
 
-		TerminateProcess(h, 0);
+		TerminateProcess(h, 137);
 		CloseHandle(h);
 	}
 
@@ -88,16 +88,19 @@ namespace mpp_impl {
 
 	void terminate_process(const process_info &info, bool force)
 	{
-		TerminateProcess(info._pid, 0);
+		// CNI_API.md §6: kill(force=false) → SIGTERM (143), kill(force=true) → SIGKILL (137).
+		TerminateProcess(info._pid, force ? 137 : 143);
 	}
 
 	void terminate_process_tree(const process_info &info, bool force)
 	{
-		(void)force;
+		// force is ignored for descendants — Windows has no process-tree
+		// SIGTERM equivalent.  The exit code still follows the convention.
+		const UINT code = force ? 137 : 143;
 		DWORD root_pid = GetProcessId(info._pid);
 		if (root_pid != 0)
 			terminate_descendants(root_pid);
-		TerminateProcess(info._pid, 0);
+		TerminateProcess(info._pid, code);
 	}
 
 	bool process_exited(const process_info &info)

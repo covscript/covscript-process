@@ -46,7 +46,9 @@ public:
 	bool readable  = false;
 	bool writable  = false;
 	bool closed    = false;
+	bool append    = false;  // true when opened in append ("a") mode
 	int64_t read_pos = 0;
+	int64_t write_pos = 0;
 
 private:
 	std::unique_ptr<fdistream> _istream;
@@ -55,8 +57,12 @@ private:
 public:
 #ifdef MOZART_PLATFORM_WIN32
 	HANDLE handle = INVALID_HANDLE_VALUE;
+		// C runtime fd created once via _open_osfhandle for libuv async I/O.
+		// Shared by all uv_fs_read / uv_fs_write calls; closed in close_file().
+		int uv_fd = -1;
 
 	fd_type native_fd() const { return handle; }
+		int get_uv_fd() const { return uv_fd; }
 
 	void close_file()
 	{
@@ -64,7 +70,14 @@ public:
 		closed = true;
 		_istream.reset();
 		_ostream.reset();
-		if (handle != INVALID_HANDLE_VALUE) {
+		if (uv_fd >= 0) {
+			// _open_osfhandle transfers handle ownership to the C runtime fd.
+			// Closing the fd also closes the underlying HANDLE, so we must NOT
+			// call CloseHandle() afterwards (that would double-close).
+			_close(uv_fd);
+			uv_fd = -1;
+			handle = INVALID_HANDLE_VALUE;
+		} else if (handle != INVALID_HANDLE_VALUE) {
 			CloseHandle(handle);
 			handle = INVALID_HANDLE_VALUE;
 		}
@@ -199,6 +212,7 @@ inline file_ptr open_file(const std::string &path, const std::string &mode)
 	auto f = std::make_shared<mpp::file>();
 	f->readable = read_only || read_write;
 	f->writable = write_only || read_write;
+	f->append = append_mode;
 
 #ifdef MOZART_PLATFORM_WIN32
 	DWORD access = 0;
@@ -221,6 +235,16 @@ inline file_ptr open_file(const std::string &path, const std::string &mode)
 
 	if (f->handle == INVALID_HANDLE_VALUE)
 		return {};
+
+	// Create a C runtime fd for libuv async I/O once, so repeated
+	// uv_fs_read / uv_fs_write calls share the same fd position.
+	{
+		int fl = 0;
+		if (f->readable && f->writable) fl = _O_RDWR;
+		else if (f->readable)           fl = _O_RDONLY;
+		else                            fl = _O_WRONLY;
+		f->uv_fd = _open_osfhandle(reinterpret_cast<intptr_t>(f->handle), fl);
+	}
 
 	if (append_mode) {
 		LARGE_INTEGER zero = {};

@@ -45,6 +45,9 @@ Copy-Item ./cmake-build/mingw-w64/process.cse ./build/imports/process.cse -Force
 cs -i ./build/imports ./tests/test_unit.csc
 cs -i ./build/imports ./tests/test_async.csc
 cs -i ./build/imports ./tests/test_file_redirect.csc
+cs -i ./build/imports ./tests/test_stream.csc
+cs -i ./build/imports ./tests/test_fiber.csc
+cs -i ./build/imports ./tests/test_corner.csc
 ```
 
 ## Implementation Notes

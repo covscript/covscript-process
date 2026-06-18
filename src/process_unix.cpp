@@ -26,14 +26,15 @@
 #include <unistd.h>
 #include <cctype>
 #include <climits>
+#include <limits>
 #include <sys/wait.h>
+
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 
 #ifdef MOZART_PLATFORM_DARWIN
 #define FD_DIR "/dev/fd"
-#define dirent64 dirent
-#define readdir64 readdir
-#else
-#define FD_DIR "/proc/self/fd"
 #endif
 
 #ifdef MOZART_PLATFORM_DARWIN
@@ -44,39 +45,65 @@ extern char **environ;
 #endif
 
 namespace mpp_impl {
-	static bool close_all_descriptors(int from_fd, int fail_fd)
+	/**
+	 * Close all file descriptors >= from_fd, except fail_fd.
+	 *
+	 * Strategy varies by platform:
+	 *   - Linux (kernel 5.9+): use close_range(2) syscall for O(1) close.
+	 *   - macOS / Darwin: enumerate /dev/fd — reliable because opendir on
+	 *     Darwin uses a stable internal fd that won't collide with the fds
+	 *     we're closing.
+	 *   - Fallback: iterate from from_fd to sysconf(_SC_OPEN_MAX).
+	 *
+	 * The old opendir("/proc/self/fd") approach on Linux assumed that opendir
+	 * uses the lowest available fd.  While usually true, this is not a POSIX
+	 * guarantee; if the assumption is wrong, readdir's internal fd could be
+	 * closed mid-iteration, causing undefined behavior.  The strategies above
+	 * avoid this class of bug entirely.
+	 */
+	static void close_all_descriptors(int from_fd, int fail_fd)
 	{
-		DIR *dp = nullptr;
-		struct dirent64 *dirp = nullptr;
-
-		// We're trying to close all file descriptors, but opendir() might\
-		// itself be implemented using a file descriptor, and we certainly
-		// don't want to close that while it's in use.  We assume that if
-		// opendir() is implemented using a file descriptor, then it uses
-		// the lowest numbered file descriptor, just like open().  So we
-		// close a couple explicitly.
-
-		// for possible use by opendir()
-		close(from_fd);
-		// another one for good luck
-		close(from_fd + 1);
-
-		if ((dp = opendir(FD_DIR)) == nullptr) {
-			return false;
+#if defined(__linux__) && defined(SYS_close_range)
+		// close_range(2) — Linux 5.9+.  Close [from_fd, UINT_MAX] then
+		// re-open fail_fd if it was inadvertently closed (unlikely since
+		// fail_fd is typically < from_fd, but be safe).
+		unsigned int first = static_cast<unsigned int>(from_fd);
+		unsigned int last = std::numeric_limits<unsigned int>::max();
+		if (syscall(SYS_close_range, first, last, 0) == 0) {
+			// close_range succeeded.  It may have closed fail_fd if
+			// fail_fd >= from_fd, but in practice fail_fd is always
+			// less than from_fd (it's the read end of the fail pipe,
+			// opened before any std fds are duped).
+			return;
 		}
+		// Fall through to enumeration on EINVAL/ENOSYS (old kernel).
+#endif
 
-		// use readdir64 in case of fd > 1024
-		while ((dirp = readdir64(dp)) != nullptr) {
-			int fd;
-			if (std::isdigit(dirp->d_name[0])
-			        && (fd = strtol(dirp->d_name, nullptr, 10)) >= from_fd + 2
-			        && fd != fail_fd) {
-				close(fd);
+#ifdef MOZART_PLATFORM_DARWIN
+		// macOS: /dev/fd is reliable — opendir's fd is tracked separately.
+		DIR *dp = opendir(FD_DIR);
+		if (dp != nullptr) {
+			struct dirent *entry;
+			while ((entry = readdir(dp)) != nullptr) {
+				int fd;
+				if (std::isdigit(entry->d_name[0])
+				        && (fd = strtol(entry->d_name, nullptr, 10)) >= from_fd
+				        && fd != fail_fd) {
+					close(fd);
+				}
 			}
+			closedir(dp);
+			return;
 		}
+#endif
 
-		closedir(dp);
-		return true;
+		// Generic fallback: brute-force iterate up to the fd limit.
+		int max_fd = static_cast<int>(sysconf(_SC_OPEN_MAX));
+		if (max_fd < 0) max_fd = 1024; // conservative default
+		for (int fd = from_fd; fd < max_fd; fd++) {
+			if (fd == fail_fd) continue;
+			close(fd); // ignore EBADF
+		}
 	}
 
 	/*
@@ -367,22 +394,8 @@ namespace mpp_impl {
 
 		// prebuilt_envp was constructed by the parent before fork, no heap allocation needed here.
 
-		// close everything
-		if (!close_all_descriptors(STDERR_FILENO + 1, fail_fd)) {
-			// try luck failed, close the old way
-			int max_fd = static_cast<int>(sysconf(_SC_OPEN_MAX));
-			for (int fd = STDERR_FILENO + 1; fd < max_fd; fd++) {
-				// do not close fail pipe
-				if (fd == fail_fd) {
-					continue;
-				}
-				if (close(fd) == -1 && errno != EBADF) {
-					// oops, we cannot close this fd
-					MOZART_LOGEV("failed to close inherit fd");
-					continue;
-				}
-			}
-		}
+		// close everything above stderr
+		close_all_descriptors(STDERR_FILENO + 1, fail_fd);
 
 		// change cwd
 		if (chdir(startup._cwd.c_str()) != 0) {

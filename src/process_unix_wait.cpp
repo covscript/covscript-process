@@ -33,13 +33,18 @@ namespace mpp_impl {
 
 	/**
 	 * Poll child process status without reaping the exit value.
+	 *
+	 * Only waits for WEXITED — a stopped (SIGSTOP/SIGTSTP) process is still
+	 * alive and should not be treated as exited.  The previous inclusion of
+	 * WSTOPPED caused wait_for() to return prematurely when a child was
+	 * stopped (e.g. Ctrl+Z in a terminal), reporting a spurious exit code.
 	 */
 	static int poll_process_status(int pid)
 	{
 		siginfo_t info;
 		memset(&info, '\0', sizeof(info));
 
-		if (waitid(P_PID, pid, &info, WEXITED | WSTOPPED | WNOHANG | WNOWAIT) == -1) {
+		if (waitid(P_PID, pid, &info, WEXITED | WNOHANG | WNOWAIT) == -1) {
 			return PROCESS_POLL_FAILED;
 		}
 
@@ -49,8 +54,6 @@ namespace mpp_impl {
 		case CLD_KILLED:
 		case CLD_DUMPED:
 			return 0x80 + WTERMSIG(info.si_status);
-		case CLD_STOPPED:
-			return 0x80 + WSTOPSIG(info.si_status);
 		default:
 			return PROCESS_STILL_ALIVE;
 		}
@@ -65,10 +68,13 @@ namespace mpp_impl {
 		// process_exited()/poll_process_status() will get ECHILD; the existing
 		// branches there already treat ECHILD as "process is gone" and return
 		// the cached exit code held in mpp::process::_exit_code.
+		//
+		// WSTOPPED is intentionally omitted: a stopped child (SIGSTOP/SIGTSTP)
+		// is still alive and should not cause wait_for() to return.
 		while (true) {
 			siginfo_t si;
 			memset(&si, '\0', sizeof(si));
-			if (waitid(P_PID, info._pid, &si, WEXITED | WSTOPPED) == -1) {
+			if (waitid(P_PID, info._pid, &si, WEXITED) == -1) {
 				if (errno == EINTR) {
 					continue;
 				}
@@ -89,10 +95,8 @@ namespace mpp_impl {
 			case CLD_KILLED:
 			case CLD_DUMPED:
 				return 0x80 + WTERMSIG(si.si_status);
-			case CLD_STOPPED:
-				return 0x80 + WSTOPSIG(si.si_status);
 			default:
-				// Spurious wakeup; loop and wait again.
+				// Spurious wakeup or unexpected si_code; loop and wait again.
 				continue;
 			}
 		}

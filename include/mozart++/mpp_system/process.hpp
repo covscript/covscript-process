@@ -490,22 +490,13 @@ namespace mpp {
 		/**
 		 * Blocking convenience wrapper (original semantics preserved):
 		 * begin + drive loop until both readers finish + collect.
+		 *
+		 * Delegates to end_communicate() which already drives uv_run and
+		 * collects results — no need to duplicate the wait loops here.
 		 */
 		communicate_result communicate()
 		{
 			begin_communicate();
-			if (_this->_out_work) {
-				while (!_this->_out_work->done.load(std::memory_order_acquire)) {
-					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-					std::this_thread::yield();
-				}
-			}
-			if (_this->_err_work) {
-				while (!_this->_err_work->done.load(std::memory_order_acquire)) {
-					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-					std::this_thread::yield();
-				}
-			}
 			return end_communicate();
 		}
 
