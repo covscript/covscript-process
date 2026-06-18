@@ -42,7 +42,7 @@ function check_not_null(label, v)
 end
 
 function default_shell()
-    if is_windows()
+    if system.is_platform_windows()
         return "cmd"
     else
         return "/bin/sh"
@@ -69,9 +69,6 @@ function make_shell(cmd)
 end
 
 # True on Windows, false on Unix-like systems.
-function is_windows()
-    return system.getenv("OS") == "Windows_NT"
-end
 
 # Start a long-running child via a system-provided sleep equivalent.
 # Avoids depending on `cs` being on PATH (T06/T14 used to do that).
@@ -79,7 +76,7 @@ end
 #   Unix:    sleep N
 function start_sleeper(seconds)
     var b = new process.builder
-    if is_windows()
+    if system.is_platform_windows()
         b.cmd("ping -n " + (seconds + 1) + " 127.0.0.1 >nul")
         b.use_shell(default_shell())
     else
@@ -261,8 +258,13 @@ end
 section("T15 arg() basic path")
 try
     var _b15 = new process.builder
-    _b15.cmd("cmd")
-    _b15.arg({"/c", "echo first"})
+    if system.is_platform_windows()
+        _b15.cmd("cmd")
+        _b15.arg({"/c", "echo first"})
+    else
+        _b15.cmd("echo")
+        _b15.arg({"first"})
+    end
     check_eq("single arg() call works", _b15.start().wait(), 0)
 catch _e15
     check("T15 unexpected exception", false)
@@ -320,7 +322,7 @@ try
     # Drive a small interpreter directly (no shell wrapping), so the new
     # MSVCRT-style quoting in process_win32.cpp is exercised end-to-end.
     var _b20 = new process.builder
-    if is_windows()
+    if system.is_platform_windows()
         _b20.cmd("powershell")
         _b20.arg({"-NoProfile", "-Command", "for ($i=0;$i -lt 80;$i++){'x' * 1024}"})
     else
@@ -452,7 +454,7 @@ end
 section("T27 process.exec()")
 try
     var _p27 = null
-    if is_windows()
+    if system.is_platform_windows()
         _p27 = process.exec("cmd", {"/c", "echo t27"})
     else
         _p27 = process.exec("/bin/sh", {"-c", "echo t27"})

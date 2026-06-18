@@ -211,18 +211,25 @@ namespace mpp_impl {
 			mpp::throw_ex<mpp::runtime_error>("unable to fork subprocess");
 		}
 		// Close child-side ends that the parent doesn't need.
-		// For inherited streams the arrays contain FD_INVALID; close_fd is a no-op.
-		if (!startup.inherit_stdin)  mpp_impl::close_fd(pstdin[PIPE_READ]);
-		if (!startup.inherit_stdout) mpp_impl::close_fd(pstdout[PIPE_WRITE]);
-		if (!startup.inherit_stdout && !startup.inherit_stderr && !startup.merge_outputs)
+		// Redirect targets are owned by the caller (file_t); skip them.
+		if (!startup.inherit_stdin && !startup._stdin.redirected())
+			mpp_impl::close_fd(pstdin[PIPE_READ]);
+		if (!startup.inherit_stdout && !startup._stdout.redirected())
+			mpp_impl::close_fd(pstdout[PIPE_WRITE]);
+		if (!startup.inherit_stdout && !startup.inherit_stderr
+		    && !startup.merge_outputs && !startup._stderr.redirected())
 			mpp_impl::close_fd(pstderr[PIPE_WRITE]);
 
 		info._pid = pi.hProcess;
 		info._tid = pi.hThread;
-		info._stdin  = startup.inherit_stdin  ? FD_INVALID : pstdin[PIPE_WRITE];
-		info._stdout = startup.inherit_stdout ? FD_INVALID : pstdout[PIPE_READ];
-		// _stderr is FD_INVALID when merge_outputs, inherit_stdout, or inherit_stderr
-		info._stderr = (startup.merge_outputs || startup.inherit_stdout || startup.inherit_stderr)
+		// Only store pipe handles that we own.  Redirect targets belong to
+		// the caller's file_t and inherited handles belong to the OS.
+		info._stdin  = (startup.inherit_stdin  || startup._stdin.redirected())
+		               ? FD_INVALID : pstdin[PIPE_WRITE];
+		info._stdout = (startup.inherit_stdout || startup._stdout.redirected())
+		               ? FD_INVALID : pstdout[PIPE_READ];
+		info._stderr = (startup.merge_outputs || startup.inherit_stdout
+		                || startup.inherit_stderr || startup._stderr.redirected())
 		               ? FD_INVALID : pstderr[PIPE_READ];
 	}
 

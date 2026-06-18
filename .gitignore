@@ -48,6 +48,7 @@ imgui.ini
 .vscode/
 
 # Build Caches
+build-linux/
 cmake-build-debug/
 cmake-build/
 build/

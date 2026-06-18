@@ -31,12 +31,9 @@ function check_not_null(label, v)
     check(label, v != null)
 end
 
-function is_windows()
-    return system.getenv("OS") == "Windows_NT"
-end
 
 function shell_prog()
-    if is_windows()
+    if system.is_platform_windows()
         return "cmd"
     else
         return "/bin/sh"
@@ -61,7 +58,7 @@ function open_async_file(path, mode)
 end
 
 function shell_echo_stdout(msg)
-    if is_windows()
+    if system.is_platform_windows()
         return "echo " + msg
     else
         return "echo " + msg
@@ -69,7 +66,7 @@ function shell_echo_stdout(msg)
 end
 
 function shell_emit_stderr(msg)
-    if is_windows()
+    if system.is_platform_windows()
         return "echo " + msg + " 1>&2"
     else
         return "echo " + msg + " 1>&2"

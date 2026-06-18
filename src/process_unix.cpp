@@ -459,6 +459,7 @@ namespace mpp_impl {
 		pid_t pid = fork();
 
 		if (pid < 0) {
+			close_pipe(pfail);
 			mpp::throw_ex<mpp::runtime_error>("unable to fork subprocess");
 
 		}
@@ -486,9 +487,11 @@ namespace mpp_impl {
 			case sizeof(child_errno):
 				// child failed to exec, we will wait it.
 				waitpid(pid, nullptr, 0);
+				close_fd(pfail[PIPE_READ]);
 				mpp::throw_ex<mpp::runtime_error>("child exec failed: " + std::string(strerror(child_errno)));
 				break;
 			default:
+				close_fd(pfail[PIPE_READ]);
 				mpp::throw_ex<mpp::runtime_error>("read failed: " + std::string(strerror(errno)));
 				break;
 			}
@@ -519,9 +522,15 @@ namespace mpp_impl {
 			}
 
 			info._pid = pid;
-			info._stdin  = startup.inherit_stdin  ? FD_INVALID : pstdin[PIPE_WRITE];
-			info._stdout = startup.inherit_stdout ? FD_INVALID : pstdout[PIPE_READ];
-			info._stderr = (startup.merge_outputs || startup.inherit_stdout || startup.inherit_stderr)
+			// Only store pipe fds that we own.  Redirect targets and inherited
+			// streams are owned by the caller (file_t / OS), so we must not
+			// close them in close_process().
+			info._stdin  = (startup.inherit_stdin  || startup._stdin.redirected())
+			               ? FD_INVALID : pstdin[PIPE_WRITE];
+			info._stdout = (startup.inherit_stdout || startup._stdout.redirected())
+			               ? FD_INVALID : pstdout[PIPE_READ];
+			info._stderr = (startup.merge_outputs || startup.inherit_stdout
+			                || startup.inherit_stderr || startup._stderr.redirected())
 			               ? FD_INVALID : pstderr[PIPE_READ];
 
 			// on *nix systems, fork() doesn't create threads to run process
