@@ -1,9 +1,16 @@
 /**
- * Mozart++ Template Library
+ * Mozart++ Template Library — forked from
+ *   Chengdu Covariant Technologies Co., LTD. (2020-2021)
+ *   https://covariant.cn/
+ *   https://github.com/chengdu-zhirui/
+ *
  * Licensed under Apache 2.0
- * Copyright (C) 2020-2021 Chengdu Covariant Technologies Co., LTD.
- * Website: https://covariant.cn/
- * Github:  https://github.com/chengdu-zhirui/
+ *
+ * Copyright (C) 2017-2026 Michael Lee(李登淳)
+ *
+ * Email:   mikecovlee@163.com
+ * Github:  https://github.com/mikecovlee
+ * Website: http://covscript.org.cn
  */
 #include <mozart++/core>
 
@@ -19,10 +26,7 @@
 #include <unistd.h>
 #include <cctype>
 #include <climits>
-#include <sys/stat.h>
 #include <sys/wait.h>
-#include <sched.h>
-#include <csignal>
 
 #ifdef MOZART_PLATFORM_DARWIN
 #define FD_DIR "/dev/fd"

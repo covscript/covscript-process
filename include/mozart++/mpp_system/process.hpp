@@ -1,9 +1,16 @@
 /**
- * Mozart++ Template Library
+ * Mozart++ Template Library — forked from
+ *   Chengdu Covariant Technologies Co., LTD. (2020-2021)
+ *   https://covariant.cn/
+ *   https://github.com/chengdu-zhirui/
+ *
  * Licensed under Apache 2.0
- * Copyright (C) 2020-2021 Chengdu Covariant Technologies Co., LTD.
- * Website: https://covariant.cn/
- * Github:  https://github.com/chengdu-zhirui/
+ *
+ * Copyright (C) 2017-2026 Michael Lee(李登淳)
+ *
+ * Email:   mikecovlee@163.com
+ * Github:  https://github.com/mikecovlee
+ * Website: http://covscript.org.cn
  */
 #pragma once
 
@@ -13,13 +20,14 @@
 #include <unordered_map>
 #include <algorithm>
 #include <chrono>
-#include <future>
 #include <sstream>
 #include <thread>
 #include <vector>
 #include <string>
 #include <memory>
-#include <cstdint>
+#include <atomic>
+
+#include <uv.h>
 
 namespace mpp_impl {
 	using mpp::fd_type;
@@ -107,6 +115,58 @@ namespace mpp_impl {
 }
 
 namespace mpp {
+namespace detail {
+
+/**
+ * Opaque async-work state backed by libuv's thread pool (uv_queue_work).
+ *
+ * Replaces the previous std::async / std::future implementation, which
+ * spawned a fresh OS thread per operation.  libuv reuses a fixed-size
+ * thread pool (default 4 threads), integrates with the CovScript event
+ * loop, and lets poll_*() methods drive completion via uv_run() without
+ * syscalls on the hot path.
+ *
+ * Instances are allocated on the heap and owned by std::unique_ptr inside
+ * member_holder.  The work callback runs on a libuv thread-pool thread;
+ * the after-work callback runs on the loop thread when uv_run() is called.
+ */
+struct async_work {
+	uv_work_t req;
+	mpp_impl::process_info *info = nullptr;
+	std::istream *stream = nullptr;
+	std::atomic<bool> done{false};
+	bool cancelled = false;
+	int exit_code = 0;
+	std::string output;
+};
+
+// Work callbacks (stateless lambdas → implicit conversion to fn ptr).
+inline void wait_work_cb(uv_work_t *req)
+{
+	auto *w = static_cast<async_work *>(req->data);
+	w->exit_code = mpp_impl::wait_for(*w->info);
+}
+
+inline void read_work_cb(uv_work_t *req)
+{
+	auto *w = static_cast<async_work *>(req->data);
+	std::ostringstream ss;
+	ss << w->stream->rdbuf();
+	w->output = ss.str();
+}
+
+inline void after_work_cb(uv_work_t *req, int status)
+{
+	auto *w = static_cast<async_work *>(req->data);
+	if (status == UV_ECANCELED)
+		w->cancelled = true;
+	w->done.store(true, std::memory_order_release);
+}
+
+} // namespace detail
+} // namespace mpp
+
+namespace mpp {
 	using mpp_impl::redirect_info;
 	using mpp_impl::process_info;
 	using mpp_impl::process_startup;
@@ -126,13 +186,25 @@ namespace mpp {
 			// Set to true once we observe via OS poll that the process has exited,
 			// so subsequent has_exited() calls skip the OS round-trip.
 			bool _observed_exited = false;
-			// Reader futures for the asynchronous communicate() split interface.
-			// Populated by begin_communicate(); consumed by end_communicate().
-			std::future<std::string> _out_future;
-			std::future<std::string> _err_future;
-			// Waiter future for the asynchronous wait split interface.
-			// Populated by begin_wait(); consumed by collect_wait().
-			std::future<int> _wait_future;
+			// Async work states backed by libuv uv_queue_work, replacing the
+			// previous std::async / std::future implementation.  Each pointer
+			// is non-null when the corresponding async operation is in flight.
+			std::unique_ptr<detail::async_work> _out_work;
+			std::unique_ptr<detail::async_work> _err_work;
+			std::unique_ptr<detail::async_work> _wait_work;
+
+			// Helper: wait for a single work item to finish (or cancel it),
+			// then release the unique_ptr.
+			static void await_work(std::unique_ptr<detail::async_work> &w)
+			{
+				if (!w) return;
+				uv_cancel(reinterpret_cast<uv_req_t *>(&w->req));
+				while (!w->done.load(std::memory_order_acquire)) {
+					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+					std::this_thread::yield();
+				}
+				w.reset();
+			}
 
 			explicit member_holder(const process_info &info)
 				: _info(info), _stdin(_info._stdin),
@@ -140,10 +212,10 @@ namespace mpp {
 
 			~member_holder()
 			{
-				// Join any in-flight futures before closing file descriptors.
-				if (_wait_future.valid()) _wait_future.wait();
-				if (_out_future.valid()) _out_future.wait();
-				if (_err_future.valid()) _err_future.wait();
+				// Cancel / join any in-flight async work before closing fds.
+				await_work(_wait_work);
+				await_work(_out_work);
+				await_work(_err_work);
 				mpp_impl::close_process(_info);
 			}
 		};
@@ -212,32 +284,37 @@ namespace mpp {
 		}
 
 		/**
-		 * Start a background OS thread that performs a single blocking
-		 * mpp_impl::wait_for() and stores the exit code in _wait_future.
+		 * Submit a blocking mpp_impl::wait_for() to libuv's thread pool.
+		 * The result is collected via poll_wait() / collect_wait().
 		 * Idempotent: safe to call multiple times.
 		 */
 		void begin_wait()
 		{
-			if (_this->_exit_code.has_value() || _this->_wait_future.valid()) {
+			if (_this->_exit_code.has_value() || _this->_wait_work) {
 				return;
 			}
-			auto *impl = _this.get();
-			impl->_wait_future = std::async(std::launch::async, [impl]() {
-				return mpp_impl::wait_for(impl->_info);
-			});
+			auto w = std::make_unique<detail::async_work>();
+			w->req.data = w.get();
+			w->info = &_this->_info;
+			if (uv_queue_work(uv_default_loop(), &w->req,
+			                  detail::wait_work_cb, detail::after_work_cb) != 0) {
+				return; // submission failed, w is freed
+			}
+			_this->_wait_work = std::move(w);
 		}
 
 		/**
-		 * Non-blocking poll of the wait future.
+		 * Non-blocking poll: drive the libuv loop to process pending
+		 * completion callbacks, then check whether the wait work is done.
 		 * Returns true when the process has exited (or was already collected).
-		 * Zero syscalls when the future is not yet ready; caches result in _exit_code.
+		 * Zero syscalls when no work is pending; caches result in _exit_code.
 		 */
 		bool poll_wait()
 		{
-			if (_this->_exit_code.has_value()) {
+			if (_this->_exit_code.has_value() || _this->_observed_exited) {
 				return true;
 			}
-			if (!_this->_wait_future.valid()) {
+			if (!_this->_wait_work) {
 				// No async wait started; fall back to a direct (syscall) check.
 				if (mpp_impl::process_exited(_this->_info)) {
 					_this->_observed_exited = true;
@@ -245,26 +322,35 @@ namespace mpp {
 				}
 				return false;
 			}
-			if (_this->_wait_future.wait_for(std::chrono::milliseconds(0))
-			        == std::future_status::ready) {
-				_this->_exit_code = _this->_wait_future.get();
+			// Drive the loop so the after-work callback (which sets `done`)
+			// gets a chance to fire.
+			uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+			if (_this->_wait_work->done.load(std::memory_order_acquire)) {
+				_this->_exit_code = _this->_wait_work->exit_code;
+				_this->_wait_work.reset();
 				return true;
 			}
 			return false;
 		}
 
 		/**
-		 * Block until the wait future resolves (if it was started), then cache and
-		 * return the exit code.  Falls back to direct wait_for() if begin_wait() was
-		 * never called.
+		 * Block until the libuv wait work resolves (if it was started),
+		 * then cache and return the exit code.  Falls back to direct
+		 * wait_for() if begin_wait() was never called.
 		 */
 		int collect_wait()
 		{
 			if (_this->_exit_code.has_value()) {
 				return _this->_exit_code.value();
 			}
-			if (_this->_wait_future.valid()) {
-				_this->_exit_code = _this->_wait_future.get();
+			if (_this->_wait_work) {
+				// Drive the loop until the work completes.
+				while (!_this->_wait_work->done.load(std::memory_order_acquire)) {
+					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+					std::this_thread::yield();
+				}
+				_this->_exit_code = _this->_wait_work->exit_code;
+				_this->_wait_work.reset();
 				return _this->_exit_code.value();
 			}
 			// Fallback: no async wait was started, do it synchronously.
@@ -276,11 +362,12 @@ namespace mpp {
 			if (_this->_exit_code.has_value() || _this->_observed_exited) {
 				return true;
 			}
-			// If an async wait is in progress, check it without a syscall.
-			if (_this->_wait_future.valid()) {
-				if (_this->_wait_future.wait_for(std::chrono::milliseconds(0))
-				        == std::future_status::ready) {
-					_this->_exit_code = _this->_wait_future.get();
+			// If an async wait is in progress, drive the loop and check.
+			if (_this->_wait_work) {
+				uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+				if (_this->_wait_work->done.load(std::memory_order_acquire)) {
+					_this->_exit_code = _this->_wait_work->exit_code;
+					_this->_wait_work.reset();
 					return true;
 				}
 				return false;
@@ -326,45 +413,50 @@ namespace mpp {
 		};
 
 		/**
-		 * Launch reader futures for stdout/stderr and a waiter future; returns
-		 * immediately.  Captures a stable raw pointer to member_holder so the
-		 * caller may freely move or re-seat the shared_ptr<process> without
-		 * invalidating in-flight captures.  Must be followed by end_communicate()
-		 * before the next call; the destructor safely joins any outstanding future.
+		 * Submit reader work for stdout/stderr and a waiter work to libuv's
+		 * thread pool; returns immediately.  Captures a stable raw pointer to
+		 * member_holder so the caller may freely move or re-seat the
+		 * shared_ptr<process> without invalidating in-flight captures.  Must
+		 * be followed by end_communicate() before the next call; the
+		 * destructor safely cancels/joins any outstanding work.
 		 */
 		void begin_communicate()
 		{
-			// Start the exit waiter in parallel with the IO readers so that process
-			// exit and pipe drain race concurrently rather than sequentially.
+			// Start the exit waiter in parallel with the IO readers.
 			begin_wait();
 			auto *impl = _this.get();
-			if (impl->_info._stdout != FD_INVALID) {
-				impl->_out_future = std::async(std::launch::async, [impl]() {
-					std::ostringstream ss;
-					ss << impl->_stdout.rdbuf();
-					return ss.str();
-				});
+			if (impl->_info._stdout != FD_INVALID && !impl->_out_work) {
+				auto w = std::make_unique<detail::async_work>();
+				w->req.data = w.get();
+				w->stream = &impl->_stdout;
+				if (uv_queue_work(uv_default_loop(), &w->req,
+				                  detail::read_work_cb, detail::after_work_cb) == 0) {
+					impl->_out_work = std::move(w);
+				}
 			}
-			if (impl->_info._stderr != FD_INVALID) {
-				impl->_err_future = std::async(std::launch::async, [impl]() {
-					std::ostringstream ss;
-					ss << impl->_stderr.rdbuf();
-					return ss.str();
-				});
+			if (impl->_info._stderr != FD_INVALID && !impl->_err_work) {
+				auto w = std::make_unique<detail::async_work>();
+				w->req.data = w.get();
+				w->stream = &impl->_stderr;
+				if (uv_queue_work(uv_default_loop(), &w->req,
+				                  detail::read_work_cb, detail::after_work_cb) == 0) {
+					impl->_err_work = std::move(w);
+				}
 			}
 		}
 
 		/**
-		 * Non-blocking poll: returns true when both reader futures are done.
+		 * Non-blocking poll: drive the libuv loop and return true when
+		 * both reader-work items have completed.
 		 * Safe to call from a yield loop without blocking the OS thread.
 		 */
 		bool poll_communicate()
 		{
-			constexpr auto zero = std::chrono::milliseconds(0);
-			bool out_ok = !_this->_out_future.valid() ||
-			              _this->_out_future.wait_for(zero) == std::future_status::ready;
-			bool err_ok = !_this->_err_future.valid() ||
-			              _this->_err_future.wait_for(zero) == std::future_status::ready;
+			uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+			bool out_ok = !_this->_out_work ||
+			              _this->_out_work->done.load(std::memory_order_acquire);
+			bool err_ok = !_this->_err_work ||
+			              _this->_err_work->done.load(std::memory_order_acquire);
 			return out_ok && err_ok;
 		}
 
@@ -375,21 +467,45 @@ namespace mpp {
 		communicate_result end_communicate()
 		{
 			communicate_result result;
-			if (_this->_out_future.valid()) result.out = _this->_out_future.get();
-			if (_this->_err_future.valid()) result.err = _this->_err_future.get();
+			if (_this->_out_work) {
+				while (!_this->_out_work->done.load(std::memory_order_acquire)) {
+					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+					std::this_thread::yield();
+				}
+				result.out = std::move(_this->_out_work->output);
+				_this->_out_work.reset();
+			}
+			if (_this->_err_work) {
+				while (!_this->_err_work->done.load(std::memory_order_acquire)) {
+					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+					std::this_thread::yield();
+				}
+				result.err = std::move(_this->_err_work->output);
+				_this->_err_work.reset();
+			}
 			result.exit_code = collect_wait();
 			return result;
 		}
 
 		/**
 		 * Blocking convenience wrapper (original semantics preserved):
-		 * begin + block for both readers + collect.
+		 * begin + drive loop until both readers finish + collect.
 		 */
 		communicate_result communicate()
 		{
 			begin_communicate();
-			if (_this->_out_future.valid()) _this->_out_future.wait();
-			if (_this->_err_future.valid()) _this->_err_future.wait();
+			if (_this->_out_work) {
+				while (!_this->_out_work->done.load(std::memory_order_acquire)) {
+					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+					std::this_thread::yield();
+				}
+			}
+			if (_this->_err_work) {
+				while (!_this->_err_work->done.load(std::memory_order_acquire)) {
+					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+					std::this_thread::yield();
+				}
+			}
 			return end_communicate();
 		}
 

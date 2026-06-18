@@ -1,9 +1,16 @@
 /**
- * Mozart++ Template Library
+ * Mozart++ Template Library — forked from
+ *   Chengdu Covariant Technologies Co., LTD. (2020-2021)
+ *   https://covariant.cn/
+ *   https://github.com/chengdu-zhirui/
+ *
  * Licensed under Apache 2.0
- * Copyright (C) 2020-2021 Chengdu Covariant Technologies Co., LTD.
- * Website: https://covariant.cn/
- * Github:  https://github.com/chengdu-zhirui/
+ *
+ * Copyright (C) 2017-2026 Michael Lee(李登淳)
+ *
+ * Email:   mikecovlee@163.com
+ * Github:  https://github.com/mikecovlee
+ * Website: http://covscript.org.cn
  */
 #include <mozart++/core>
 
@@ -12,7 +19,6 @@
 #include <mozart++/process>
 
 #include <cerrno>
-#include <sched.h>
 #include <csignal>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -67,7 +73,12 @@ namespace mpp_impl {
 					continue;
 				}
 				if (errno == ECHILD) {
-					// Already reaped (e.g. SIGCHLD ignored by the host process).
+					// Already reaped: either SIGCHLD is ignored by the host
+					// process (sa_handler == SIG_IGN), or the child was reaped
+					// by an external signal handler.  We return 0 as a best-effort
+					// fallback; the true exit code is no longer retrievable.
+					// NOTE: this means callers cannot distinguish between
+					// "exited with code 0" and "exited with unknown code".
 					return 0;
 				}
 				return -1;

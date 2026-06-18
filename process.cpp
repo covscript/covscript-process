@@ -13,9 +13,9 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *
-* Copyright (C) 2017-2021 Michael Lee(李登淳)
+* Copyright (C) 2017-2026 Michael Lee(李登淳)
 *
-* Email:   lee@covariant.cn, mikecovlee@163.com
+* Email:   mikecovlee@163.com
 * Github:  https://github.com/mikecovlee
 * Website: http://covscript.org.cn
 */
@@ -33,7 +33,6 @@
 #ifdef MOZART_PLATFORM_WIN32
 #include <io.h>
 #include <fcntl.h>
-#include <Windows.h>
 #endif
 
 // Cooperative-yield helper. When the host CovScript runtime supports fibers
@@ -371,9 +370,9 @@ CNI_ROOT_NAMESPACE {
 			return cs::istream(&p->err(), [](std::istream *) {});
 		})
 		CNI_V(wait, [](const process_t &p) {
-			// In a fiber context: launch begin_wait() so a background OS thread does
+			// In a fiber context: launch begin_wait() so work on the libuv thread pool performs
 			// the single blocking waitpid/WaitForSingleObject, then cooperatively
-			// yield until poll_wait() sees the future ready — zero syscalls per tick.
+			// yield until poll_wait() sees the work complete — zero syscalls per tick.
 			// Outside a fiber: collect_wait() falls back to direct synchronous wait.
 #if COVSCRIPT_PROCESS_HAVE_FIBER
 			if (cs::current_process != nullptr && !cs::current_process->fiber_stack.empty()) {
@@ -386,7 +385,7 @@ CNI_ROOT_NAMESPACE {
 			return p->collect_wait();
 		})
 		CNI_V(try_wait, [](const process_t &p) -> cs::var {
-			// poll_wait() checks the future state without a syscall (if begin_wait()
+			// poll_wait() checks the work state without a syscall (if begin_wait()
 			// was already called), or falls back to a single process_exited() check.
 			if (p->poll_wait())
 			{
@@ -396,7 +395,7 @@ CNI_ROOT_NAMESPACE {
 		})
 		CNI_V(wait_poll, [](const process_t &p, long long timeout_ms, int poll_interval_ms) -> cs::var {
 			// Launch the async waiter once so every subsequent poll_wait() call is
-			// a zero-syscall future status check (mutex only).
+			// a zero-syscall status check (mutex only).
 			p->begin_wait();
 			const int interval = std::max(1, poll_interval_ms);
 			// Already done (e.g. second call after process exited).
@@ -406,7 +405,7 @@ CNI_ROOT_NAMESPACE {
 			}
 			if (timeout_ms < 0)
 			{
-				// Indefinite: poll until the future is ready.
+				// Indefinite: poll until the work is done.
 				while (!p->poll_wait())
 					cs_runtime_yield(interval);
 				return cs::var::make<cs::numeric>(p->collect_wait());
@@ -437,7 +436,7 @@ CNI_ROOT_NAMESPACE {
 			}
 			if (timeout_ms < 0)
 			{
-				// Indefinite: drive the callback loop until the future is ready.
+				// Indefinite: drive the callback loop until the work is done.
 				while (!p->poll_wait())
 					cs::invoke(on_wait);
 				return cs::var::make<cs::numeric>(p->collect_wait());
@@ -501,7 +500,7 @@ CNI_ROOT_NAMESPACE {
 		CNI_V(communicate, [](const process_t &p) {
 			// Drains stdout and stderr simultaneously to avoid pipe-full deadlocks,
 			// waits for the process to exit, and returns {stdout, stderr, exit_code}.
-			// In a fiber context: begin_communicate() launches the reader futures
+			// In a fiber context: begin_communicate() submits reader work to the libuv thread pool
 			// (same thread overhead as always — two reader threads), then we poll
 			// poll_communicate() + yield cooperatively until both readers finish.
 			// No extra wrapper thread is needed; peer fibers stay schedulable.

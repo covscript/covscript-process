@@ -59,6 +59,19 @@ set_target_properties(uv_a PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(mozart
     PUBLIC
         include
+        third_party/libuv/include
+)
+
+# mozart headers now include uv.h (process.hpp); ensure consistent
+# WIN32_LEAN_AND_MEAN on MinGW so that windows.h (pulled in via the
+# mozart++/core → io.hpp chain) does not pre-include winsock2.h before uv.h.
+if (MINGW)
+    target_compile_definitions(mozart PRIVATE WIN32_LEAN_AND_MEAN)
+endif ()
+
+target_link_libraries(mozart
+    PRIVATE
+        uv_a
 )
 
 add_library(process SHARED process.cpp)

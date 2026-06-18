@@ -1,9 +1,16 @@
 /**
- * Mozart++ Template Library: System/File
+ * Mozart++ Template Library: System/File — forked from
+ *   Chengdu Covariant Technologies Co., LTD. (2020-2021)
+ *   https://covariant.cn/
+ *   https://github.com/chengdu-zhirui/
+ *
  * Licensed under Apache 2.0
- * Copyright (C) 2020-2021 Chengdu Covariant Technologies Co., LTD.
- * Website: https://covariant.cn/
- * Github:  https://github.com/chengdu-zhirui/
+ *
+ * Copyright (C) 2017-2026 Michael Lee(李登淳)
+ *
+ * Email:   mikecovlee@163.com
+ * Github:  https://github.com/mikecovlee
+ * Website: http://covscript.org.cn
  */
 #pragma once
 
@@ -42,8 +49,8 @@ public:
 	int64_t read_pos = 0;
 
 private:
-	fdistream *_istream = nullptr;
-	fdostream *_ostream = nullptr;
+	std::unique_ptr<fdistream> _istream;
+	std::unique_ptr<fdostream> _ostream;
 
 public:
 #ifdef MOZART_PLATFORM_WIN32
@@ -55,8 +62,8 @@ public:
 	{
 		if (closed) return;
 		closed = true;
-		delete _istream; _istream = nullptr;
-		delete _ostream; _ostream = nullptr;
+		_istream.reset();
+		_ostream.reset();
 		if (handle != INVALID_HANDLE_VALUE) {
 			CloseHandle(handle);
 			handle = INVALID_HANDLE_VALUE;
@@ -104,8 +111,8 @@ public:
 	{
 		if (closed) return;
 		closed = true;
-		delete _istream; _istream = nullptr;
-		delete _ostream; _ostream = nullptr;
+		_istream.reset();
+		_ostream.reset();
 		if (fd >= 0) {
 			::close(fd);
 			fd = -1;
@@ -147,7 +154,7 @@ public:
 	 */
 	fdistream &out_stream()
 	{
-		if (!_istream) _istream = new fdistream(native_fd());
+		if (!_istream) _istream = std::make_unique<fdistream>(native_fd());
 		return *_istream;
 	}
 
@@ -156,7 +163,7 @@ public:
 	 */
 	fdostream &in_stream()
 	{
-		if (!_ostream) _ostream = new fdostream(native_fd());
+		if (!_ostream) _ostream = std::make_unique<fdostream>(native_fd());
 		return *_ostream;
 	}
 
