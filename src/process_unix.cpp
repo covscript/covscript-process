@@ -61,23 +61,9 @@ namespace mpp_impl {
 	 * closed mid-iteration, causing undefined behavior.  The strategies above
 	 * avoid this class of bug entirely.
 	 */
-	static void close_all_descriptors(int from_fd, int fail_fd)
+	static void close_all_descriptors(int from_fd, int *fail_fd_ptr)
 	{
-#if defined(__linux__) && defined(SYS_close_range)
-		// close_range(2) — Linux 5.9+.  Close [from_fd, UINT_MAX] then
-		// re-open fail_fd if it was inadvertently closed (unlikely since
-		// fail_fd is typically < from_fd, but be safe).
-		unsigned int first = static_cast<unsigned int>(from_fd);
-		unsigned int last = std::numeric_limits<unsigned int>::max();
-		if (syscall(SYS_close_range, first, last, 0) == 0) {
-			// close_range succeeded.  It may have closed fail_fd if
-			// fail_fd >= from_fd, but in practice fail_fd is always
-			// less than from_fd (it's the read end of the fail pipe,
-			// opened before any std fds are duped).
-			return;
-		}
-		// Fall through to enumeration on EINVAL/ENOSYS (old kernel).
-#endif
+		int fail_fd = *fail_fd_ptr;
 
 #ifdef MOZART_PLATFORM_DARWIN
 		// macOS: /dev/fd is reliable — opendir's fd is tracked separately.
@@ -395,7 +381,7 @@ namespace mpp_impl {
 		// prebuilt_envp was constructed by the parent before fork, no heap allocation needed here.
 
 		// close everything above stderr
-		close_all_descriptors(STDERR_FILENO + 1, fail_fd);
+		close_all_descriptors(STDERR_FILENO + 1, &fail_fd);
 
 		// change cwd
 		if (chdir(startup._cwd.c_str()) != 0) {

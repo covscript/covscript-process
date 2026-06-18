@@ -78,6 +78,7 @@ namespace mpp_impl {
 		fd_type _stdin = FD_INVALID;
 		fd_type _stdout = FD_INVALID;
 		fd_type _stderr = FD_INVALID;
+		bool _stdin_closed = false;
 	};
 
 	void create_process_impl(const process_startup &startup,
@@ -232,35 +233,61 @@ namespace mpp {
 
 		process(process &&) = default;
 
-		process &operator=(process &&) = delete;
+		process &operator=(process &&other) noexcept
+		{
+			if (this != &other)
+				_this = std::move(other._this);
+			return *this;
+		}
 
 		process &operator=(const process &) = delete;
 
 	public:
 		~process() = default;
 
+		/**
+		 * Returns the write end of the child's stdin pipe.
+		 * Data written here becomes the child process's standard input.
+		 * Returns a reference to an internally-owned fdostream.
+		 */
 		std::ostream &in()
 		{
 			return _this->_stdin;
 		}
 
+		/**
+		 * Returns the read end of the child's stdout pipe.
+		 * Read from here to consume the child process's standard output.
+		 * Returns a reference to an internally-owned fdistream.
+		 */
 		std::istream &out()
 		{
 			return _this->_stdout;
 		}
 
+		/**
+		 * Returns the read end of the child's stderr pipe.
+		 * Read from here to consume the child process's standard error.
+		 * Returns a reference to an internally-owned fdistream.
+		 */
 		std::istream &err()
 		{
 			return _this->_stderr;
 		}
 
-		int wait_for()
+		/**
+		 * Close the write end of the child's stdin pipe, signaling EOF to
+		 * the child process.  Idempotent — safe to call multiple times.
+		 * After this call, writing to in() has no effect.
+		 */
+		void close_stdin()
 		{
-			if (_this->_exit_code.has_value()) {
-				return _this->_exit_code.value();
+			if (_this->_info._stdin_closed) return;
+			_this->_info._stdin_closed = true;
+			if (_this->_info._stdin != FD_INVALID) {
+				mpp_impl::close_fd(_this->_info._stdin);
+				_this->_info._stdin = FD_INVALID;
 			}
-			_this->_exit_code = mpp_impl::wait_for(_this->_info);
-			return _this->_exit_code.value();
 		}
 
 		/**
@@ -268,7 +295,6 @@ namespace mpp {
 		 * poll_interval_ms controls the sleep between polls on Unix (minimum 1 ms);
 		 * on Windows the OS signals process exit natively and this value is ignored.
 		 * Returns the exit code wrapped in optional if exited, or nullopt on timeout.
-		 * Note: CNI layer no longer calls this; it is kept as a public API.
 		 */
 		std::optional<int> wait_timeout_ms(int timeout_ms, int poll_interval_ms = 5)
 		{
@@ -335,8 +361,8 @@ namespace mpp {
 
 		/**
 		 * Block until the libuv wait work resolves (if it was started),
-		 * then cache and return the exit code.  Falls back to direct
-		 * wait_for() if begin_wait() was never called.
+		 * then cache and return the exit code.  Falls back to a direct
+		 * synchronous mpp_impl::wait_for() if begin_wait() was never called.
 		 */
 		int collect_wait()
 		{
@@ -354,7 +380,8 @@ namespace mpp {
 				return _this->_exit_code.value();
 			}
 			// Fallback: no async wait was started, do it synchronously.
-			return wait_for();
+			_this->_exit_code = mpp_impl::wait_for(_this->_info);
+			return _this->_exit_code.value();
 		}
 
 		bool has_exited()
@@ -422,6 +449,8 @@ namespace mpp {
 		 */
 		void begin_communicate()
 		{
+			// Close stdin so the child sees EOF and can exit naturally.
+			close_stdin();
 			// Start the exit waiter in parallel with the IO readers.
 			begin_wait();
 			auto *impl = _this.get();
@@ -510,6 +539,7 @@ namespace mpp {
 	class process_builder {
 	private:
 		process_startup _startup;
+		bool _args_set = false;
 
 	public:
 		process_builder() = default;
@@ -547,9 +577,10 @@ namespace mpp {
 		template <typename Container>
 		process_builder &arguments(const Container &c)
 		{
-			if (_startup._cmdline.size() > 1) {
+			if (_args_set) {
 				mpp::throw_ex<mpp::runtime_error>("arguments() must be called at most once per process_builder");
 			}
+			_args_set = true;
 			std::copy(c.begin(), c.end(), std::back_inserter(_startup._cmdline));
 			return *this;
 		}

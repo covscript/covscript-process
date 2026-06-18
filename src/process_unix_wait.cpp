@@ -79,12 +79,6 @@ namespace mpp_impl {
 					continue;
 				}
 				if (errno == ECHILD) {
-					// Already reaped: either SIGCHLD is ignored by the host
-					// process (sa_handler == SIG_IGN), or the child was reaped
-					// by an external signal handler.  We return 0 as a best-effort
-					// fallback; the true exit code is no longer retrievable.
-					// NOTE: this means callers cannot distinguish between
-					// "exited with code 0" and "exited with unknown code".
 					return 0;
 				}
 				return -1;

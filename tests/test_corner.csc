@@ -651,25 +651,23 @@ end
 # =========================================================================
 # C32: process_t.in() stream writes to child stdin
 # =========================================================================
-section("C32 process_t.in() stream writes stdin")
+section("C32 process_t.in() stream writes stdin + communicate closes stdin")
 try
     var b32 = new process.builder
     if system.is_platform_windows()
-        # NOTE: communicate() does not close stdin, so stdin-consuming
-        # processes (cat, sort, findstr) may hang.  Use a non-consuming
-        # command and just verify the stream object is valid.
-        b32.cmd("cmd")
-        b32.arg({"/c", "echo c32_ok"})
+        b32.cmd("sort")
     else
-        b32.cmd("echo")
-        b32.arg({"c32_ok"})
+        b32.cmd("cat")
     end
     var p32 = b32.start()
     var in32 = p32.in()
     check_not_null("in() stream not null", in32)
+    in32.println("hello_stdin_c32")
+    in32.flush()
+    # communicate() now closes stdin before waiting, so cat/sort will see EOF
     var r32 = p32.communicate()
-    check_eq("process exits 0", r32[2], 0)
-    check("stdout captured", r32[0] != "")
+    check_eq("stdin-consuming process exits 0", r32[2], 0)
+    check("stdin data echoed to stdout", r32[0] != "")
 catch _e
     check("C32 unexpected exception: " + _e, false)
 end

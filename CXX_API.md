@@ -16,47 +16,47 @@ C++ mpp 库层接口文档。脚本层 CNI API 见 [CNI_API.md](CNI_API.md)。
 
 跨平台文件句柄封装。Win32 使用 `HANDLE`，Unix 使用 fd。
 
-### 1.1 公开成员
+### 1.1 状态查询
 
-| 成员 | 类型 | 说明 |
+| 方法 | 签名 | 说明 |
 |------|------|------|
-| `readable` | `bool` | 文件是否可读 |
-| `writable` | `bool` | 文件是否可写 |
-| `closed` | `bool` | 文件是否已关闭 |
-| `append` | `bool` | 是否以 append 模式打开 |
-| `read_pos` | `int64_t` | 当前读位置（由 read_at / CNI read 更新） |
-| `write_pos` | `int64_t` | 当前写位置（由 CNI write 更新，append 模式不使用） |
+| `is_readable` | `() const -> bool` | 文件是否可读且未关闭 |
+| `is_writable` | `() const -> bool` | 文件是否可写且未关闭 |
+| `is_closed` | `() const -> bool` | 文件是否已关闭 |
+| `is_append` | `() const -> bool` | 是否以 append 模式打开 |
 
-### 1.2 平台相关
+### 1.2 偏移量管理
 
-**Windows**：
+CNI 异步读写使用的位置追踪。非 append 模式下 `write()` 使用 `write_position()` 作为偏移量；append 模式下由 OS 管理。
 
-| 成员/方法 | 说明 |
-|-----------|------|
-| `handle` | `HANDLE`，Win32 原生句柄 |
-| `uv_fd` | `int`，`_open_osfhandle` 创建的 C 运行时 fd，供 libuv 使用 |
-| `native_fd()` | 返回 `handle` |
-| `get_uv_fd()` | 返回 `uv_fd` |
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `read_position` | `() const -> int64_t` | 当前读位置 |
+| `advance_read` | `(int64_t n)` | 读位置前进 n 字节 |
+| `write_position` | `() const -> int64_t` | 当前写位置 |
+| `advance_write` | `(int64_t n)` | 写位置前进 n 字节 |
 
-**Unix**：
+### 1.3 原生句柄
 
-| 成员/方法 | 说明 |
-|-----------|------|
-| `fd` | `int`，POSIX 文件描述符 |
-| `native_fd()` | 返回 `fd` |
+| 方法 | 说明 |
+|------|------|
+| `native_fd()` | Windows: 返回 `HANDLE`；Unix: 返回 `int fd` |
+| `get_uv_fd()` | （仅 Windows）返回 `_open_osfhandle` 创建的 C 运行时 fd |
 
-### 1.3 方法
+### 1.4 生命周期
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `close_file` | `()` | 关闭文件（幂等）。析构函数自动调用 |
-| `read_at` | `(char *buf, int size) -> int` | 在 `read_pos` 位置读取，返回字节数 / 0(EOF) / -1(错误) |
-| `write_bytes` | `(const char *buf, int size) -> int` | 写入数据，返回字节数或 -1 |
-| `flush_file` | `() -> bool` | 刷盘 |
-| `out_stream` | `() -> fdistream&` | 懒创建的读取流包装 |
-| `in_stream` | `() -> fdostream&` | 懒创建的写入流包装 |
 
-### 1.4 工厂函数
+### 1.5 流包装（懒创建）
+
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `out_stream` | `fdistream&` | 读取流。`close_file()` 后失效 |
+| `in_stream` | `fdostream&` | 写入流。`close_file()` 后失效 |
+
+### 1.6 工厂函数
 
 ```cpp
 mpp::file_ptr mpp::open_file(const std::string &path, const std::string &mode);
@@ -74,11 +74,11 @@ mpp::file_ptr mpp::open_file(const std::string &path, const std::string &mode);
 - 不可识别的 mode 抛 `mpp::runtime_error`。
 - Windows 上文件句柄以 inheritable 方式打开，可直接用于 process redirect。
 
-### 1.5 类型别名
+### 1.7 设计说明
 
-```cpp
-using file_ptr = std::shared_ptr<file>;
-```
+- 所有数据成员为 private，通过方法访问。
+- 不可拷贝、不可移动（持有 OS 句柄的所有权）。
+- `read_at()`/`write_bytes()`/`flush_file()` 等同步方法已移除；CNI 层统一使用 libuv `uv_fs_*` 异步 I/O。
 
 ---
 
@@ -88,32 +88,37 @@ using file_ptr = std::shared_ptr<file>;
 #include <mozart++/process>
 ```
 
-子进程运行句柄。不可拷贝，可移动。
+子进程运行句柄。不可拷贝，可移动（构造 + 赋值）。
 
 ### 2.1 流访问
 
+从**调用者视角**命名：`in()` 是写入子进程 stdin 的端，`out()`/`err()` 是读取子进程 stdout/stderr 的端。
+
 | 方法 | 返回 | 说明 |
 |------|------|------|
-| `in()` | `std::ostream&` | 子进程 stdin 写入流 |
-| `out()` | `std::istream&` | 子进程 stdout 读取流 |
-| `err()` | `std::istream&` | 子进程 stderr 读取流 |
+| `in()` | `std::ostream&` | 子进程 stdin **写端** |
+| `out()` | `std::istream&` | 子进程 stdout **读端** |
+| `err()` | `std::istream&` | 子进程 stderr **读端** |
 
-### 2.2 同步等待
-
-| 方法 | 签名 | 说明 |
-|------|------|------|
-| `wait_for` | `() -> int` | 阻塞等待退出（缓存结果） |
-| `wait_timeout_ms` | `(int timeout_ms, int poll_interval_ms = 5) -> std::optional<int>` | 带超时的等待，nullopt = 超时 |
-
-### 2.3 异步等待（libuv 线程池）
+### 2.2 stdin 控制
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
+| `close_stdin` | `()` | 关闭 stdin 写端，向子进程发送 EOF（幂等） |
+
+- `communicate()` 会自动调用 `close_stdin()`。
+- 手动调用后，`in()` 流不再可用。
+
+### 2.3 等待
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `wait_timeout_ms` | `(int timeout_ms, int poll_interval_ms = 5) -> std::optional<int>` | 带超时等待。nullopt = 超时 |
 | `begin_wait` | `()` | 提交阻塞 wait 到 libuv 线程池（幂等） |
 | `poll_wait` | `() -> bool` | 非阻塞检查，true = 已退出 |
-| `collect_wait` | `() -> int` | 阻塞收集结果（驱动 uv_run） |
+| `collect_wait` | `() -> int` | 阻塞收集结果（驱动 uv_run）。未调 begin_wait 时回退到同步等待 |
 
-典型用法：
+典型异步用法：
 
 ```cpp
 p->begin_wait();
@@ -127,10 +132,10 @@ int code = p->collect_wait();
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `has_exited` | `() -> bool` | 进程是否已退出（驱动 uv_run + OS 检查） |
-| `interrupt` | `(bool force = false)` | 终止进程（force=true → SIGKILL / TerminateProcess(137)） |
+| `has_exited` | `() -> bool` | 进程是否已退出 |
+| `interrupt` | `(bool force = false)` | 终止进程 |
 | `interrupt_tree` | `(bool force = false)` | 终止进程树 |
-| `pid` | `() -> int` | 返回 OS 进程 ID |
+| `pid` | `() const -> int` | 返回 OS 进程 ID |
 
 ### 2.5 communicate
 
@@ -144,16 +149,27 @@ struct communicate_result {
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `begin_communicate` | `()` | 提交 stdout/stderr 读取 + 等待到线程池 |
+| `begin_communicate` | `()` | 关闭 stdin + 提交 stdout/stderr 读取 + 等待到线程池 |
 | `poll_communicate` | `() -> bool` | 非阻塞检查，true = 读取完成 |
 | `end_communicate` | `() -> communicate_result` | 收集结果并等待退出 |
 | `communicate` | `() -> communicate_result` | 阻塞便捷方法（begin + 等待 + collect） |
+
+**关键行为**：`begin_communicate()` 会自动关闭 stdin 写端，让从 stdin 读取的子进程能看到 EOF 并正常退出。
 
 ### 2.6 静态工厂
 
 ```cpp
 static process exec(const std::string &command);
 static process exec(const std::string &command, const std::vector<std::string> &args);
+```
+
+### 2.7 移动语义
+
+```cpp
+process(process &&) = default;                    // 可移动构造
+process &operator=(process &&other) noexcept;     // 可移动赋值
+process(const process &) = delete;                // 不可拷贝
+process &operator=(const process &) = delete;     // 不可拷贝
 ```
 
 ---
@@ -164,7 +180,7 @@ static process exec(const std::string &command, const std::vector<std::string> &
 #include <mozart++/process>
 ```
 
-Builder 模式配置进程启动参数。所有 setter 返回 `process_builder&` 以支持链式调用。
+Builder 模式配置进程启动参数。所有 setter 返回 `process_builder&` 以支持链式调用。可拷贝、可移动。
 
 ### 3.1 方法
 
@@ -190,12 +206,12 @@ Builder 模式配置进程启动参数。所有 setter 返回 `process_builder&`
 - `shell(program)` 设置 shell 程序（如 `"/bin/sh"` 或 `"cmd"`）。
 - `shell(nullptr)` 关闭 shell 模式。
 - shell 模式下 `start()` 将命令行包装为 `{shell, "-c"/"/c", combined_cmd}`。
-- C++ 层保留 `shell(nullptr_t)` 供内部使用；CNI 仅暴露 `use_shell(program)`。
 
 ### 3.3 arguments() 约束
 
 - 每个 `process_builder` 实例最多调用一次 `arguments()`。
 - 重复调用抛 `mpp::runtime_error`。
+- 使用显式 `_args_set` 标志追踪，不依赖 `_cmdline.size()`。
 
 ---
 
@@ -207,17 +223,17 @@ Builder 模式配置进程启动参数。所有 setter 返回 `process_builder&`
 
 ```cpp
 struct process_startup {
-    std::vector<std::string> _cmdline;           // 命令行
-    std::optional<std::string> _shell_program;   // shell 程序
-    std::unordered_map<std::string, std::string> _env;  // 环境变量
-    bool _inherit_env = true;                    // 继承父进程环境
-    std::string _cwd = ".";                      // 工作目录
-    redirect_info _stdin, _stdout, _stderr;      // 重定向信息
-    bool merge_outputs = false;                  // 合并输出
-    bool inherit_stdin = false;                  // 继承 stdin
-    bool inherit_stdout = false;                 // 继承 stdout
-    bool inherit_stderr = false;                 // 继承 stderr
-    bool shell_mode = false;                     // shell 模式
+    std::vector<std::string> _cmdline;
+    std::optional<std::string> _shell_program;
+    std::unordered_map<std::string, std::string> _env;
+    bool _inherit_env = true;
+    std::string _cwd = ".";
+    redirect_info _stdin, _stdout, _stderr;
+    bool merge_outputs = false;
+    bool inherit_stdin = false;
+    bool inherit_stdout = false;
+    bool inherit_stderr = false;
+    bool shell_mode = false;
 };
 ```
 
@@ -225,11 +241,12 @@ struct process_startup {
 
 ```cpp
 struct process_info {
-    fd_type _tid;      // 线程句柄（仅 Windows）
-    fd_type _pid;      // 进程句柄（Windows）或 PID（Unix）
-    fd_type _stdin;    // stdin 管道写端
-    fd_type _stdout;   // stdout 管道读端
-    fd_type _stderr;   // stderr 管道读端
+    fd_type _tid;           // 线程句柄（仅 Windows）
+    fd_type _pid;           // 进程句柄（Windows）或 PID（Unix）
+    fd_type _stdin;         // stdin 管道写端
+    fd_type _stdout;        // stdout 管道读端
+    fd_type _stderr;        // stderr 管道读端
+    bool _stdin_closed;     // stdin 是否已关闭
 };
 ```
 

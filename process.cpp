@@ -143,26 +143,26 @@ CNI_ROOT_NAMESPACE {
 			if (f) f->close_file();
 		})
 		CNI_V(is_readable, [](const file_t &f) -> bool {
-			return f && f->readable && !f->closed;
+			return f && f->is_readable();
 		})
 		CNI_V(is_writable, [](const file_t &f) -> bool {
-			return f && f->writable && !f->closed;
+			return f && f->is_writable();
 		})
 		// out() -> cs::istream for reading file content sequentially.
 		CNI_V(out, [](file_t &f) -> cs::var {
-			if (!f || f->closed || !f->readable) return cs::null_pointer;
+			if (!f || !f->is_readable()) return cs::null_pointer;
 			return cs::istream(&f->out_stream(), [](std::istream *) {});
 		})
 		// in() -> cs::ostream for writing to the file.
 		CNI_V(in, [](file_t &f) -> cs::var {
-			if (!f || f->closed || !f->writable) return cs::null_pointer;
+			if (!f || !f->is_writable()) return cs::null_pointer;
 			return cs::ostream(&f->in_stream(), [](std::ostream *) {});
 		})
 		// read(size, deadline_ms): read up to size bytes at current position.
 		// Returns data string on success, empty string on EOF, null on error/timeout.
 		// deadline_ms < 0: wait indefinitely; >= 0: wait up to that many ms.
 		CNI_V(read, [](file_t &f, int size, int deadline_ms) -> cs::var {
-			if (!f || f->closed || !f->readable) return cs::null_pointer;
+			if (!f || !f->is_readable()) return cs::null_pointer;
 			if (size <= 0) return cs::var::make<std::string>(std::string{});
 
 			std::vector<char> buf(size);
@@ -175,7 +175,7 @@ CNI_ROOT_NAMESPACE {
 
 			const int submit = uv_fs_read(
 				uv_default_loop(), &req, ufd, &iov, 1,
-				static_cast<int64_t>(f->read_pos), uv_fs_complete);
+				static_cast<int64_t>(f->read_position()), uv_fs_complete);
 			if (submit < 0) {
 				uv_fs_req_cleanup(&req);
 				return cs::null_pointer;
@@ -185,7 +185,7 @@ CNI_ROOT_NAMESPACE {
 
 			const int n = state.result;
 			if (n > 0) {
-				f->read_pos += n;
+				f->advance_read(n);
 				return cs::var::make<std::string>(std::string(buf.data(), n));
 			}
 			if (n < 0) return cs::null_pointer;
@@ -195,7 +195,7 @@ CNI_ROOT_NAMESPACE {
 		// write(data, deadline_ms): write data to the file.
 		// Returns bytes written or -1 on error.
 		CNI_V(write, [](file_t &f, const std::string &data, int deadline_ms) -> int {
-			if (!f || f->closed || !f->writable) return -1;
+			if (!f || !f->is_writable()) return -1;
 
 			uv_buf_t iov = uv_buf_init(const_cast<char *>(data.data()), static_cast<unsigned int>(data.size()));
 			uv_fs_t req{};
@@ -205,8 +205,8 @@ CNI_ROOT_NAMESPACE {
 			if (ufd < 0) return -1;
 
 			// In append mode, pass -1 so the OS writes at the end of the file.
-			// Using write_pos would overwrite from position 0 instead.
-			const int64_t offset = f->append ? -1 : f->write_pos;
+			// Using write_position() would overwrite from position 0 instead.
+			const int64_t offset = f->is_append() ? -1 : f->write_position();
 			const int submit = uv_fs_write(
 				uv_default_loop(), &req, ufd, &iov, 1,
 				offset, uv_fs_complete);
@@ -216,13 +216,13 @@ CNI_ROOT_NAMESPACE {
 			}
 			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
 				return -1;
-			if (state.result > 0 && !f->append)
-				f->write_pos += state.result;
+			if (state.result > 0 && !f->is_append())
+				f->advance_write(state.result);
 			return state.result;
 		})
 		// flush(deadline_ms): flush write buffers. Returns true on success.
 		CNI_V(flush, [](file_t &f, int deadline_ms) -> bool {
-			if (!f || f->closed || !f->writable) return false;
+			if (!f || !f->is_writable()) return false;
 
 			uv_fs_t req{};
 			uv_fs_op_state state{};
@@ -315,19 +315,19 @@ CNI_ROOT_NAMESPACE {
 		})
 		// redirect_in(file_t): redirect child stdin from a file_t opened for reading.
 		CNI_V(redirect_in, [](builder_t &b, const file_t &f) {
-			if (!f || f->closed || !f->readable)
+			if (!f || !f->is_readable())
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for reading");
 			b.redirect_stdin(f->native_fd());
 		})
 		// redirect_out(file_t): redirect child stdout to a file_t opened for writing.
 		CNI_V(redirect_out, [](builder_t &b, const file_t &f) {
-			if (!f || f->closed || !f->writable)
+			if (!f || !f->is_writable())
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for writing");
 			b.redirect_stdout(f->native_fd());
 		})
 		// redirect_err(file_t): redirect child stderr to a file_t opened for writing.
 		CNI_V(redirect_err, [](builder_t &b, const file_t &f) {
-			if (!f || f->closed || !f->writable)
+			if (!f || !f->is_writable())
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for writing");
 			b.redirect_stderr(f->native_fd());
 		})
