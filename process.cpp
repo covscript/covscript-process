@@ -77,7 +77,9 @@ static inline void uv_fs_complete(uv_fs_t *req)
 	state->result = static_cast<int>(req->result);
 	state->done = true;
 	if (state->owns_uv_file && state->owned_uv_file >= 0) {
+#ifdef MOZART_PLATFORM_WIN32
 		_close(static_cast<int>(state->owned_uv_file));
+#endif
 		state->owned_uv_file = -1;
 		state->owns_uv_file = false;
 	}
@@ -190,7 +192,9 @@ CNI_ROOT_NAMESPACE {
 				static_cast<int64_t>(f->read_pos), uv_fs_complete);
 			if (submit < 0) {
 				if (state.owns_uv_file && state.owned_uv_file >= 0) {
+					#ifdef MOZART_PLATFORM_WIN32
 					_close(static_cast<int>(state.owned_uv_file));
+#endif
 				}
 				uv_fs_req_cleanup(&req);
 				return cs::null_pointer;
@@ -227,7 +231,9 @@ CNI_ROOT_NAMESPACE {
 				-1, uv_fs_complete);
 			if (submit < 0) {
 				if (state.owns_uv_file && state.owned_uv_file >= 0) {
+					#ifdef MOZART_PLATFORM_WIN32
 					_close(static_cast<int>(state.owned_uv_file));
+#endif
 				}
 				uv_fs_req_cleanup(&req);
 				return -1;
@@ -253,7 +259,9 @@ CNI_ROOT_NAMESPACE {
 				uv_default_loop(), &req, ufd, uv_fs_complete);
 			if (submit < 0) {
 				if (state.owns_uv_file && state.owned_uv_file >= 0) {
+					#ifdef MOZART_PLATFORM_WIN32
 					_close(static_cast<int>(state.owned_uv_file));
+#endif
 				}
 				uv_fs_req_cleanup(&req);
 				return false;
