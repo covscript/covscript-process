@@ -116,55 +116,55 @@ namespace mpp_impl {
 }
 
 namespace mpp {
-namespace detail {
+	namespace detail {
 
-/**
- * Opaque async-work state backed by libuv's thread pool (uv_queue_work).
- *
- * Replaces the previous std::async / std::future implementation, which
- * spawned a fresh OS thread per operation.  libuv reuses a fixed-size
- * thread pool (default 4 threads), integrates with the CovScript event
- * loop, and lets poll_*() methods drive completion via uv_run() without
- * syscalls on the hot path.
- *
- * Instances are allocated on the heap and owned by std::unique_ptr inside
- * member_holder.  The work callback runs on a libuv thread-pool thread;
- * the after-work callback runs on the loop thread when uv_run() is called.
- */
-struct async_work {
-	uv_work_t req;
-	mpp_impl::process_info *info = nullptr;
-	std::istream *stream = nullptr;
-	std::atomic<bool> done{false};
-	bool cancelled = false;
-	int exit_code = 0;
-	std::string output;
-};
+		/**
+		 * Opaque async-work state backed by libuv's thread pool (uv_queue_work).
+		 *
+		 * Replaces the previous std::async / std::future implementation, which
+		 * spawned a fresh OS thread per operation.  libuv reuses a fixed-size
+		 * thread pool (default 4 threads), integrates with the CovScript event
+		 * loop, and lets poll_*() methods drive completion via uv_run() without
+		 * syscalls on the hot path.
+		 *
+		 * Instances are allocated on the heap and owned by std::unique_ptr inside
+		 * member_holder.  The work callback runs on a libuv thread-pool thread;
+		 * the after-work callback runs on the loop thread when uv_run() is called.
+		 */
+		struct async_work {
+			uv_work_t req;
+			mpp_impl::process_info *info = nullptr;
+			std::istream *stream = nullptr;
+			std::atomic<bool> done{false};
+			bool cancelled = false;
+			int exit_code = 0;
+			std::string output;
+		};
 
 // Work callbacks (stateless lambdas → implicit conversion to fn ptr).
-inline void wait_work_cb(uv_work_t *req)
-{
-	auto *w = static_cast<async_work *>(req->data);
-	w->exit_code = mpp_impl::wait_for(*w->info);
-}
+		inline void wait_work_cb(uv_work_t *req)
+		{
+			auto *w = static_cast<async_work *>(req->data);
+			w->exit_code = mpp_impl::wait_for(*w->info);
+		}
 
-inline void read_work_cb(uv_work_t *req)
-{
-	auto *w = static_cast<async_work *>(req->data);
-	std::ostringstream ss;
-	ss << w->stream->rdbuf();
-	w->output = ss.str();
-}
+		inline void read_work_cb(uv_work_t *req)
+		{
+			auto *w = static_cast<async_work *>(req->data);
+			std::ostringstream ss;
+			ss << w->stream->rdbuf();
+			w->output = ss.str();
+		}
 
-inline void after_work_cb(uv_work_t *req, int status)
-{
-	auto *w = static_cast<async_work *>(req->data);
-	if (status == UV_ECANCELED)
-		w->cancelled = true;
-	w->done.store(true, std::memory_order_release);
-}
+		inline void after_work_cb(uv_work_t *req, int status)
+		{
+			auto *w = static_cast<async_work *>(req->data);
+			if (status == UV_ECANCELED)
+				w->cancelled = true;
+			w->done.store(true, std::memory_order_release);
+		}
 
-} // namespace detail
+	} // namespace detail
 } // namespace mpp
 
 namespace mpp {

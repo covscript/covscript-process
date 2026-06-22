@@ -20,32 +20,31 @@
 
 #include <cerrno>
 #include <csignal>
+#include <ctime>
+#include <optional>
 #include <sys/stat.h>
 #include <sys/wait.h>
 
 namespace mpp_impl {
 	/**
-	 * We use -1 to indicate that a process is still running,
-	 * because the return value of a process can never be -1.
-	 */
-	static constexpr int PROCESS_STILL_ALIVE = -1;
-	static constexpr int PROCESS_POLL_FAILED = -2;
-
-	/**
 	 * Poll child process status without reaping the exit value.
 	 *
+	 * Returns the exit code if the process has exited, or std::nullopt if
+	 * the process is still running or an error occurred. When std::nullopt
+	 * is returned and errno == ECHILD, the process has already been reaped
+	 * by another waiter (e.g. a SIGCHLD handler). Otherwise errno is zero
+	 * and the process is simply still alive.
+	 *
 	 * Only waits for WEXITED — a stopped (SIGSTOP/SIGTSTP) process is still
-	 * alive and should not be treated as exited.  The previous inclusion of
-	 * WSTOPPED caused wait_for() to return prematurely when a child was
-	 * stopped (e.g. Ctrl+Z in a terminal), reporting a spurious exit code.
+	 * alive and should not be treated as exited.
 	 */
-	static int poll_process_status(int pid)
+	static std::optional<int> poll_process_status(int pid)
 	{
 		siginfo_t info;
 		memset(&info, '\0', sizeof(info));
-
+		errno = 0;
 		if (waitid(P_PID, pid, &info, WEXITED | WNOHANG | WNOWAIT) == -1) {
-			return PROCESS_POLL_FAILED;
+			return std::nullopt;
 		}
 
 		switch (info.si_code) {
@@ -55,7 +54,7 @@ namespace mpp_impl {
 		case CLD_DUMPED:
 			return 0x80 + WTERMSIG(info.si_status);
 		default:
-			return PROCESS_STILL_ALIVE;
+			return std::nullopt;
 		}
 	}
 
@@ -115,34 +114,38 @@ namespace mpp_impl {
 	{
 		const int64_t poll_ns = static_cast<int64_t>(std::max(1, poll_interval_ms)) * 1000000LL;
 		int64_t remaining_ns = static_cast<int64_t>(timeout_ms) * 1000000LL;
-		struct timespec ts = {0, static_cast<long>(poll_ns)};
+		struct timespec ts = {
+			static_cast<time_t>(poll_ns / 1000000000LL),
+			static_cast<long>(poll_ns % 1000000000LL)
+		};
 		while (remaining_ns > 0) {
-			int status = poll_process_status(info._pid);
-			if (status != PROCESS_STILL_ALIVE) {
-				if (status == PROCESS_POLL_FAILED) {
-					if (errno == ECHILD) {
-						exit_code = 0;
-						return true;
-					}
-					return false;
-				}
-				exit_code = status;
+			auto status = poll_process_status(info._pid);
+			if (status.has_value()) {
+				exit_code = status.value();
 				return true;
 			}
-			nanosleep(&ts, nullptr);
-			remaining_ns -= poll_ns;
-		}
-
-		int status = poll_process_status(info._pid);
-		if (status == PROCESS_POLL_FAILED) {
 			if (errno == ECHILD) {
 				exit_code = 0;
 				return true;
 			}
-			return false;
+			// Handle EINTR so a signal doesn't shorten the wait.
+			struct timespec rem = {0, 0};
+			if (nanosleep(&ts, &rem) == -1 && errno == EINTR) {
+				int64_t intr_ns = static_cast<int64_t>(rem.tv_sec) * 1000000000LL + rem.tv_nsec;
+				remaining_ns -= (poll_ns - intr_ns);
+			}
+			else {
+				remaining_ns -= poll_ns;
+			}
 		}
-		if (status != PROCESS_STILL_ALIVE) {
-			exit_code = status;
+
+		auto status = poll_process_status(info._pid);
+		if (status.has_value()) {
+			exit_code = status.value();
+			return true;
+		}
+		if (errno == ECHILD) {
+			exit_code = 0;
 			return true;
 		}
 		return false;
@@ -150,13 +153,14 @@ namespace mpp_impl {
 
 	bool process_exited(const process_info &info)
 	{
-		int status = poll_process_status(info._pid);
+		auto status = poll_process_status(info._pid);
 
-		if (status == PROCESS_POLL_FAILED) {
-			if (errno != ECHILD) {
-				mpp::throw_ex<mpp::runtime_error>("should not reach here");
-			}
+		if (status.has_value()) {
+			return true;
+		}
 
+		if (errno == ECHILD) {
+			// Process was already reaped (e.g. by a SIGCHLD handler).
 			struct sigaction sa {};
 			if (sigaction(SIGCHLD, nullptr, &sa) != 0) {
 				mpp::throw_ex<mpp::runtime_error>("should not reach here");
@@ -181,7 +185,7 @@ namespace mpp_impl {
 			return true;
 		}
 
-		return status != PROCESS_STILL_ALIVE;
+		return false;
 	}
 
 	int get_pid(const process_info &info)

@@ -288,22 +288,6 @@ struct process_info {
 
 `std::streambuf` 实现，包装原生 fd。由 `mpp::file::in_stream()` / `out_stream()` 和 `mpp::process::in()` / `out()` / `err()` 内部使用。
 
-### 5.2 mpp::string_ref
-
-```cpp
-#include <mozart++/string>
-```
-
-LLVM 风格非拥有字符串视图。内部用于 PATH 搜索和字符串处理。
-
-### 5.3 Stream\<T\>
-
-```cpp
-#include <mozart++/stream>
-```
-
-Java 风格惰性流，支持 `filter`、`map`、`collect` 等操作。内部用于 fd 枚举等场景。
-
 ---
 
 ## 6. 构建说明

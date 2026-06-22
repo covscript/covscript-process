@@ -136,6 +136,7 @@ jobs:
         shell: bash
         run: |
           CS="${{ github.workspace }}/covscript/build/bin/cs"
+          export PATH="${{ github.workspace }}/covscript/build/bin:$PATH"
           "$CS" -i build/imports tests/test.csc
           "$CS" -i build/imports tests/test_unit.csc
           "$CS" -i build/imports tests/test_async.csc
@@ -152,6 +153,7 @@ jobs:
         shell: pwsh
         run: |
           $cs = "${{ github.workspace }}\covscript\build\bin\cs.exe"
+          $env:Path = "${{ github.workspace }}\covscript\build\bin;$env:Path"
           & $cs -i build\imports tests\test.csc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $cs -i build\imports tests\test_unit.csc

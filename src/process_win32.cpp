@@ -101,11 +101,12 @@ namespace mpp_impl {
 		std::stringstream ss;
 		for (const auto &s : startup._cmdline) {
 			const bool need_quote = s.empty()
-				|| s.find_first_of(" \t\n\v\"") != std::string::npos;
+			                        || s.find_first_of(" \t\n\v\"") != std::string::npos;
 
 			if (!need_quote) {
 				ss << s;
-			} else {
+			}
+			else {
 				ss << '"';
 				size_t i = 0;
 				while (i < s.size()) {
@@ -118,12 +119,14 @@ namespace mpp_impl {
 						// Trailing backslashes before the closing quote: must
 						// be doubled so the closing quote stays a delimiter.
 						ss << std::string(backslashes * 2, '\\');
-					} else if (s[i] == '"') {
+					}
+					else if (s[i] == '"') {
 						// Backslashes preceding a quote: double them, then
 						// escape the quote itself.
 						ss << std::string(backslashes * 2 + 1, '\\') << '"';
 						++i;
-					} else {
+					}
+					else {
 						// Backslashes not followed by a quote: emit verbatim.
 						ss << std::string(backslashes, '\\') << s[i];
 						++i;
@@ -159,7 +162,8 @@ namespace mpp_impl {
 				}
 				for (const auto &e : startup._env)
 					effective[e.first] = e.second;
-			} else {
+			}
+			else {
 				// inherit_env=false: only _env (empty env block if _env is also empty).
 				effective = startup._env;
 			}
@@ -201,11 +205,15 @@ namespace mpp_impl {
 		}
 
 		// Only suppress the console window when not inheriting the parent's terminal.
-		// If the caller uses inherit_output(true) the child should be visible in the
-		// same console window as the parent.
-		DWORD creation_flags = startup.inherit_stdout ? 0 : CREATE_NO_WINDOW;
+		// If the caller uses inherit_output(true) or inherit_stderr=true the child should
+		// be visible in the same console window as the parent.
+		DWORD creation_flags = (startup.inherit_stdout || startup.inherit_stderr) ? 0 : CREATE_NO_WINDOW;
 
-		if (!CreateProcess(nullptr, const_cast<char *>(command.c_str()),
+		// CreateProcess may modify lpCommandLine; provide a writable buffer.
+		std::vector<char> cmd_buf(command.begin(), command.end());
+		cmd_buf.push_back('\0');
+
+		if (!CreateProcess(nullptr, cmd_buf.data(),
 		                   nullptr, nullptr, true, creation_flags, envs,
 		                   startup._cwd.c_str(), &si, &pi)) {
 			mpp::throw_ex<mpp::runtime_error>("unable to fork subprocess");
@@ -217,7 +225,7 @@ namespace mpp_impl {
 		if (!startup.inherit_stdout && !startup._stdout.redirected())
 			mpp_impl::close_fd(pstdout[PIPE_WRITE]);
 		if (!startup.inherit_stdout && !startup.inherit_stderr
-		    && !startup.merge_outputs && !startup._stderr.redirected())
+		        && !startup.merge_outputs && !startup._stderr.redirected())
 			mpp_impl::close_fd(pstderr[PIPE_WRITE]);
 
 		info._pid = pi.hProcess;

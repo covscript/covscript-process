@@ -78,18 +78,18 @@ static inline void uv_fs_complete(uv_fs_t *req)
 }
 
 static inline bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_t *req,
-	uv_fs_op_state &state, int deadline_ms)
+        uv_fs_op_state &state, int deadline_ms)
 {
 	bool timed_out = false;
 	const auto deadline = std::chrono::steady_clock::now()
-		+ std::chrono::milliseconds(deadline_ms < 0 ? 0 : deadline_ms);
+	                      + std::chrono::milliseconds(deadline_ms < 0 ? 0 : deadline_ms);
 
 	while (!state.done) {
 		uv_run(loop, UV_RUN_NOWAIT);
 		if (state.done) break;
 
 		if (!timed_out && deadline_ms >= 0
-			&& std::chrono::steady_clock::now() >= deadline) {
+		        && std::chrono::steady_clock::now() >= deadline) {
 			timed_out = true;
 			uv_cancel(reinterpret_cast<uv_req_t *>(req));
 		}
@@ -174,9 +174,10 @@ CNI_ROOT_NAMESPACE {
 			if (ufd < 0) return cs::null_pointer;
 
 			const int submit = uv_fs_read(
-				uv_default_loop(), &req, ufd, &iov, 1,
-				static_cast<int64_t>(f->read_position()), uv_fs_complete);
-			if (submit < 0) {
+			                       uv_default_loop(), &req, ufd, &iov, 1,
+			                       static_cast<int64_t>(f->read_position()), uv_fs_complete);
+			if (submit < 0)
+			{
 				uv_fs_req_cleanup(&req);
 				return cs::null_pointer;
 			}
@@ -184,7 +185,8 @@ CNI_ROOT_NAMESPACE {
 				return cs::null_pointer;
 
 			const int n = state.result;
-			if (n > 0) {
+			if (n > 0)
+			{
 				f->advance_read(n);
 				return cs::var::make<std::string>(std::string(buf.data(), n));
 			}
@@ -208,9 +210,10 @@ CNI_ROOT_NAMESPACE {
 			// Using write_position() would overwrite from position 0 instead.
 			const int64_t offset = f->is_append() ? -1 : f->write_position();
 			const int submit = uv_fs_write(
-				uv_default_loop(), &req, ufd, &iov, 1,
-				offset, uv_fs_complete);
-			if (submit < 0) {
+			                       uv_default_loop(), &req, ufd, &iov, 1,
+			                       offset, uv_fs_complete);
+			if (submit < 0)
+			{
 				uv_fs_req_cleanup(&req);
 				return -1;
 			}
@@ -231,8 +234,9 @@ CNI_ROOT_NAMESPACE {
 			if (ufd < 0) return false;
 
 			const int submit = uv_fs_fsync(
-				uv_default_loop(), &req, ufd, uv_fs_complete);
-			if (submit < 0) {
+			                       uv_default_loop(), &req, ufd, uv_fs_complete);
+			if (submit < 0)
+			{
 				uv_fs_req_cleanup(&req);
 				return false;
 			}
@@ -389,12 +393,11 @@ CNI_ROOT_NAMESPACE {
 				return cs::var::make<cs::numeric>(p->collect_wait());
 			}
 			const auto deadline = std::chrono::steady_clock::now()
-			                      + std::chrono::milliseconds(timeout_ms);
+			+ std::chrono::milliseconds(timeout_ms);
 			while (std::chrono::steady_clock::now() < deadline)
 			{
 				cs_runtime_yield(interval);
-				if (p->poll_wait())
-				{
+				if (p->poll_wait()) {
 					return cs::var::make<cs::numeric>(p->collect_wait());
 				}
 			}
@@ -420,12 +423,11 @@ CNI_ROOT_NAMESPACE {
 				return cs::var::make<cs::numeric>(p->collect_wait());
 			}
 			const auto deadline = std::chrono::steady_clock::now()
-			                      + std::chrono::milliseconds(timeout_ms);
+			+ std::chrono::milliseconds(timeout_ms);
 			while (std::chrono::steady_clock::now() < deadline)
 			{
 				cs::invoke(on_wait);
-				if (p->poll_wait())
-				{
+				if (p->poll_wait()) {
 					return cs::var::make<cs::numeric>(p->collect_wait());
 				}
 			}

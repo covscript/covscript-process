@@ -17,7 +17,7 @@
 #ifdef MOZART_PLATFORM_UNIX
 
 #include <mozart++/process>
-#include <mozart++/string>
+#include <algorithm>
 #include <dirent.h>
 #include <cerrno>
 #include <fcntl.h>
@@ -144,7 +144,7 @@ namespace mpp_impl {
 	{
 		const char *path = get_path_env();
 		// it's safe to convert from size_t to int, :)
-		int count = static_cast<int>(mpp::string_ref(path).count(':')) + 1;
+		int count = static_cast<int>(std::count(path, path + strlen(path), ':')) + 1;
 		size_t pathvsize = sizeof(const char *) * (count + 1);
 		size_t pathsize = strlen(path) + 1;
 		const char **pathv = reinterpret_cast<const char **>(malloc(pathvsize + pathsize));
@@ -368,10 +368,7 @@ namespace mpp_impl {
 
 		// command-line and environments
 		size_t asize = startup._cmdline.size();
-		char *argv[asize + 1];
-
-		// argv is always terminated with a nullptr
-		argv[asize] = nullptr;
+		std::vector<char *> argv(asize + 1, nullptr);
 
 		// copy command-line arguments (points into startup._cmdline, valid after fork)
 		for (std::size_t i = 0; i < asize; ++i) {
@@ -398,7 +395,7 @@ namespace mpp_impl {
 		}
 
 		// run subprocess
-		mpp_execvpe(argv[0], const_cast<const char **>(argv), prebuilt_envp);
+		mpp_execvpe(argv[0], const_cast<const char **>(argv.data()), prebuilt_envp);
 
 		// exec failed
 		exit_with_error(fail_fd);
@@ -419,7 +416,8 @@ namespace mpp_impl {
 			// nullptr → mpp_execvpe calls execvp which inherits the parent's
 			// full environment without any copying.
 			prebuilt_envp_ptr = nullptr;
-		} else {
+		}
+		else {
 			if (startup._inherit_env) {
 				// Merge: start from parent environ, then apply _env overrides.
 				// All string construction happens before fork (no heap in child).
@@ -435,7 +433,8 @@ namespace mpp_impl {
 				env_strings.reserve(merged.size());
 				for (const auto &e : merged)
 					env_strings.push_back(e.first + "=" + e.second);
-			} else {
+			}
+			else {
 				// inherit_env=false: only _env (empty env block if _env is also empty).
 				env_strings.reserve(startup._env.size());
 				for (const auto &e : startup._env)
@@ -451,7 +450,11 @@ namespace mpp_impl {
 		// the child_proc will use this pipe to
 		// tell parent whether the process has started.
 		fd_type pfail[2] = {FD_INVALID, FD_INVALID};
+#ifdef __linux__
+		if (pipe2(pfail, O_CLOEXEC) != 0) {
+#else
 		if (!create_pipe(pfail)) {
+#endif
 			mpp::throw_ex<mpp::runtime_error>("unable to create communication pipe");
 		}
 
