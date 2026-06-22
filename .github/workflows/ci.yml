@@ -7,7 +7,7 @@
 #   2. Determines the covscript ref (tag from covscript/csbuild/release.txt on master, or master HEAD).
 #   3. Builds covscript from source (SDK ends up in covscript/csdev/).
 #   4. Builds the extension against that SDK.
-#   5. Runs all five test suites.
+#   5. Runs all test suites.
 #
 # Windows uses MinGW-w64 (matching local development practice).
 # Linux and macOS use Unix Makefiles with the system toolchain.
@@ -136,6 +136,7 @@ jobs:
         shell: bash
         run: |
           CS="${{ github.workspace }}/covscript/build/bin/cs"
+          "$CS" -i build/imports tests/test.csc
           "$CS" -i build/imports tests/test_unit.csc
           "$CS" -i build/imports tests/test_async.csc
           "$CS" -i build/imports tests/test_file_redirect.csc
@@ -151,6 +152,8 @@ jobs:
         shell: pwsh
         run: |
           $cs = "${{ github.workspace }}\covscript\build\bin\cs.exe"
+          & $cs -i build\imports tests\test.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $cs -i build\imports tests\test_unit.csc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $cs -i build\imports tests\test_async.csc

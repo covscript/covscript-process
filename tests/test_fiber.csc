@@ -65,7 +65,13 @@ function f03_body()
 end
 
 function f04_body()
-    var p = process.shell("sleep 30")
+    var sleep_cmd = ""
+    if system.is_platform_windows()
+        sleep_cmd = "ping -n 31 127.0.0.1 >nul"
+    else
+        sleep_cmd = "sleep 30"
+    end
+    var p = process.shell(sleep_cmd)
     _fr04_running = p.is_running()
     p.kill(true)
     p.wait()

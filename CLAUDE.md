@@ -42,6 +42,7 @@ Copy-Item ./cmake-build/mingw-w64/process.cse ./build/imports/process.cse -Force
 ### Run tests (must use `-i`)
 
 ```powershell
+cs -i ./build/imports ./tests/test.csc
 cs -i ./build/imports ./tests/test_unit.csc
 cs -i ./build/imports ./tests/test_async.csc
 cs -i ./build/imports ./tests/test_file_redirect.csc
