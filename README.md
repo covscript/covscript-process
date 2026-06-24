@@ -30,7 +30,7 @@ system.out.println(p.wait())
 
 - `process.builder` 是类型，不是工厂函数
 - 应使用 `new process.builder` 创建实例
-- `use_shell(program)`：传入 shell 程序路径（如 `cmd` 或 `/bin/sh`）启用 shell 模式
+- `shell(program)`：传入 shell 程序路径（如 `cmd` 或 `/bin/sh`）启用 shell 模式
 - `arg()` 每个 builder 只能调用一次，再次调用会抛异常
 
 ### 快捷 shell 启动
@@ -147,10 +147,10 @@ cs -i ./build/imports tests/test_corner.csc
 
 ## Known Constraints
 
-- `builder.use_shell(...)` 内部会把 `cmd()` + `arg()` 拼接成一条 shell 命令串，shell 元字符会被重新解释；需要精确参数语义时，直接使用 `cmd()` + `arg()` 而不调用 `use_shell()`
+- `builder.shell(...)` 内部会把 `cmd()` + `arg()` 拼接成一条 shell 命令串，shell 元字符会被重新解释；需要精确参数语义时，直接使用 `cmd()` + `arg()` 而不调用 `shell()`
 
 - 兼容提示：请统一通过 `import process` 使用本扩展，避免与解释器内置 `process` 冲突。
-- 非 shell 模式（直接 `cmd()` + `arg()`，不调用 `use_shell()`）下，Windows 按 MSVCRT 标准规则转义参数；Unix 端 fork+exec 直接接收 argv
+- 非 shell 模式（直接 `cmd()` + `arg()`，不调用 `shell()`）下，Windows 按 MSVCRT 标准规则转义参数；Unix 端 fork+exec 直接接收 argv
 
 ## 完整 API
 

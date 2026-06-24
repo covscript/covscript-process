@@ -289,51 +289,61 @@ CNI_ROOT_NAMESPACE {
 
 	CNI_TYPE_EXT_V(builder_type, builder_t, builder, builder_t())
 	{
-		CNI_V(cmd, [](builder_t &b, const std::string &str) {
-			b.command(str);
+		CNI_V(cmd, [](const cs::var &b, const std::string &str) -> cs::var {
+			b.val<builder_t>().command(str);
+			return b;
 		})
-		CNI_V(arg, [](builder_t &b, const cs::array &args) {
+		CNI_V(arg, [](const cs::var &b, const cs::array &args) -> cs::var {
 			std::vector<std::string> arr;
 			for (auto &it:args)
 				arr.emplace_back(it.const_val<std::string>());
-			b.arguments(arr);
+			b.val<builder_t>().arguments(arr);
+			return b;
 		})
-		CNI_V(dir, [](builder_t &b, const std::string &str) {
-			b.directory(str);
+		CNI_V(dir, [](const cs::var &b, const std::string &str) -> cs::var {
+			b.val<builder_t>().directory(str);
+			return b;
 		})
-		CNI_V(env, [](builder_t &b, const std::string &key, const std::string &value) {
-			b.environment(key, value);
+		CNI_V(env, [](const cs::var &b, const std::string &key, const std::string &value) -> cs::var {
+			b.val<builder_t>().environment(key, value);
+			return b;
 		})
-		CNI_V(merge_output, [](builder_t &b, bool r) {
-			b.merge_outputs(r);
+		CNI_V(merge_output, [](const cs::var &b, bool r) -> cs::var {
+			b.val<builder_t>().merge_outputs(r);
+			return b;
 		})
-		CNI_V(inherit_output, [](builder_t &b, bool v) {
-			b.inherit_output(v);
+		CNI_V(inherit_output, [](const cs::var &b, bool v) -> cs::var {
+			b.val<builder_t>().inherit_output(v);
+			return b;
 		})
-		CNI_V(inherit_env, [](builder_t &b, bool v) {
-			b.inherit_env(v);
+		CNI_V(inherit_env, [](const cs::var &b, bool v) -> cs::var {
+			b.val<builder_t>().inherit_env(v);
+			return b;
 		})
-		// Alias for script environments where member name `shell` is not reachable.
-		CNI_V(use_shell, [](builder_t &b, const std::string &program) {
-			b.shell(program);
+		CNI_V(shell, [](const cs::var &b, const std::string &program) -> cs::var {
+			b.val<builder_t>().shell(program);
+			return b;
 		})
 		// redirect_in(file_t): redirect child stdin from a file_t opened for reading.
-		CNI_V(redirect_in, [](builder_t &b, const file_t &f) {
+		CNI_V(redirect_in, [](const cs::var &b, const file_t &f) -> cs::var {
 			if (!f || !f->is_readable())
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for reading");
-			b.redirect_stdin(f->native_fd());
+			b.val<builder_t>().redirect_stdin(f->native_fd());
+			return b;
 		})
 		// redirect_out(file_t): redirect child stdout to a file_t opened for writing.
-		CNI_V(redirect_out, [](builder_t &b, const file_t &f) {
+		CNI_V(redirect_out, [](const cs::var &b, const file_t &f) -> cs::var {
 			if (!f || !f->is_writable())
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for writing");
-			b.redirect_stdout(f->native_fd());
+			b.val<builder_t>().redirect_stdout(f->native_fd());
+			return b;
 		})
 		// redirect_err(file_t): redirect child stderr to a file_t opened for writing.
-		CNI_V(redirect_err, [](builder_t &b, const file_t &f) {
+		CNI_V(redirect_err, [](const cs::var &b, const file_t &f) -> cs::var {
 			if (!f || !f->is_writable())
 				mpp::throw_ex<mpp::runtime_error>("file_t is not open for writing");
-			b.redirect_stderr(f->native_fd());
+			b.val<builder_t>().redirect_stderr(f->native_fd());
+			return b;
 		})
 		CNI_V(start, [](builder_t &b) {
 			return std::make_shared<mpp::process>(b.start());

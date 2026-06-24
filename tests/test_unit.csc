@@ -51,7 +51,7 @@ end
 
 function enable_shell(b)
     try
-        b.use_shell(default_shell())
+        b.shell(default_shell())
         return true
     catch _e1
     end
@@ -78,10 +78,10 @@ function start_sleeper(seconds)
     var b = new process.builder
     if system.is_platform_windows()
         b.cmd("ping -n " + (seconds + 1) + " 127.0.0.1 >nul")
-        b.use_shell(default_shell())
+        b.shell(default_shell())
     else
         b.cmd("sleep " + seconds)
-        b.use_shell(default_shell())
+        b.shell(default_shell())
     end
     return b.start()
 end
@@ -175,7 +175,7 @@ section("T08 communicate() merge_output")
 try
     var _b08 = new process.builder
     _b08.cmd("echo marker_t08 1>&2")
-    _b08.use_shell(default_shell())
+    _b08.shell(default_shell())
     _b08.merge_output(true)
     var _p08 = _b08.start()
     var _r08 = _p08.communicate()
@@ -213,7 +213,7 @@ try
     var _b11 = new process.builder
     _b11.env("CSPROC_TEST_VAR", "hello42")
     _b11.cmd("echo t11")
-    _b11.use_shell(default_shell())
+    _b11.shell(default_shell())
     check_eq("process with custom env exits 0", _b11.start().wait(), 0)
 catch _e11
     check("T11 unexpected exception", false)
@@ -490,7 +490,7 @@ try
     else
         _b29.cmd("cat")
     end
-    _b29.use_shell(default_shell())
+    _b29.shell(default_shell())
     var _p29 = _b29.start()
     var _r29 = _p29.communicate()
     _p29.wait()
@@ -523,7 +523,7 @@ try
         _b31.env("SystemRoot", system.getenv("SystemRoot"))
     end
     _b31.cmd("echo t31")
-    _b31.use_shell(default_shell())
+    _b31.shell(default_shell())
     check_eq("inherit_env(false) exits 0", _b31.start().wait(), 0)
 catch _e31
     check("T31 unexpected exception", false)
@@ -559,7 +559,7 @@ section("T33 stream accessors")
 try
     var _b33 = new process.builder
     _b33.cmd("echo t33_stdout")
-    _b33.use_shell(default_shell())
+    _b33.shell(default_shell())
     var _p33 = _b33.start()
     check_not_null("process_t.out() returns stream", _p33.out())
     check_not_null("process_t.err() returns stream", _p33.err())
@@ -596,7 +596,7 @@ try
     else
         _b35.cmd("echo start && sleep 10 && echo never")
     end
-    _b35.use_shell(default_shell())
+    _b35.shell(default_shell())
     _p35_holder = _b35.start()
     var _fib35 = fiber.create(_f35_body)
     _fib35.resume()
@@ -624,7 +624,7 @@ try
     else
         _b36.cmd("echo out_msg && echo err_msg 1>&2")
     end
-    _b36.use_shell(default_shell())
+    _b36.shell(default_shell())
     var _p36 = _b36.start()
     var _r36 = _p36.communicate()
     _p36.wait()
@@ -665,7 +665,7 @@ try
     else
         _b37.cmd("cat .tmp_large_output.txt")
     end
-    _b37.use_shell(default_shell())
+    _b37.shell(default_shell())
     var _p37 = _b37.start()
     var _r37 = _p37.communicate()
     _p37.wait()

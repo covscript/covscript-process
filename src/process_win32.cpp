@@ -61,16 +61,49 @@ namespace mpp_impl {
 			si.hStdInput = pstdin[PIPE_READ];
 		}
 
-		// stdout: either inherit from parent terminal or use our pipe
-		si.hStdOutput = startup.inherit_stdout ? GetStdHandle(STD_OUTPUT_HANDLE) : pstdout[PIPE_WRITE];
+		// stdout: inherit from parent terminal, redirect to a file handle, or use a pipe.
+		if (startup.inherit_stdout) {
+			si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+		}
+		else if (startup._stdout.redirected()) {
+			// Redirected: PIPE_WRITE == the file handle.
+			// Ensure it is inheritable so the child can write to it.
+			DWORD out_flags = 0;
+			if (!GetHandleInformation(pstdout[PIPE_WRITE], &out_flags)) {
+				auto le = GetLastError();
+				std::string msg = "unable to query handle info on stdout redirect";
+				msg += " (err=" + std::to_string(le);
+				msg += ", h=" + std::to_string(reinterpret_cast<intptr_t>(pstdout[PIPE_WRITE])) + ")";
+				mpp::throw_ex<mpp::runtime_error>(msg);
+			}
+			if (!(out_flags & HANDLE_FLAG_INHERIT)) {
+				if (!SetHandleInformation(pstdout[PIPE_WRITE], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+					auto le = GetLastError();
+					std::string msg = "unable to set handle info on stdout redirect";
+					msg += " (err=" + std::to_string(le);
+					msg += ", h=" + std::to_string(reinterpret_cast<intptr_t>(pstdout[PIPE_WRITE])) + ")";
+					mpp::throw_ex<mpp::runtime_error>(msg);
+				}
+			}
+			si.hStdOutput = pstdout[PIPE_WRITE];
+		}
+		else {
+			si.hStdOutput = pstdout[PIPE_WRITE];
+		}
 
-		// stderr: merge into stdout, inherit from parent, or use its own pipe
+		// stderr: merge into stdout, inherit from parent, redirect to a file, or use its own pipe
 		if (startup.merge_outputs || startup.inherit_stdout) {
 			// merge: child stderr → same destination as child stdout
 			si.hStdError = startup.inherit_stdout ? GetStdHandle(STD_OUTPUT_HANDLE) : pstdout[PIPE_WRITE];
 		}
 		else if (startup.inherit_stderr) {
 			si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+		}
+		else if (startup._stderr.redirected()) {
+			// Redirected: PIPE_WRITE == the file handle.
+			// Ensure it is inheritable so the child can write to it.
+			SetHandleInformation(pstderr[PIPE_WRITE], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+			si.hStdError = pstderr[PIPE_WRITE];
 		}
 		else {
 			si.hStdError = pstderr[PIPE_WRITE];
@@ -216,7 +249,14 @@ namespace mpp_impl {
 		if (!CreateProcess(nullptr, cmd_buf.data(),
 		                   nullptr, nullptr, true, creation_flags, envs,
 		                   startup._cwd.c_str(), &si, &pi)) {
-			mpp::throw_ex<mpp::runtime_error>("unable to fork subprocess");
+			auto last_error = GetLastError();
+			std::string msg = "unable to fork subprocess";
+			msg += " (command: ";
+			msg += command;
+			msg += ", error code: ";
+			msg += std::to_string(last_error);
+			msg += ")";
+			mpp::throw_ex<mpp::runtime_error>(msg);
 		}
 		// Close child-side ends that the parent doesn't need.
 		// Redirect targets are owned by the caller (file_t); skip them.

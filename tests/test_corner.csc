@@ -48,7 +48,7 @@ end
 
 function enable_shell(b)
     try
-        b.use_shell(default_shell())
+        b.shell(default_shell())
         return true
     catch _e1
     end
@@ -68,10 +68,10 @@ function start_sleeper(seconds)
     var b = new process.builder
     if system.is_platform_windows()
         b.cmd("ping -n " + (seconds + 1) + " 127.0.0.1 >nul")
-        b.use_shell(default_shell())
+        b.shell(default_shell())
     else
         b.cmd("sleep " + seconds)
-        b.use_shell(default_shell())
+        b.shell(default_shell())
     end
     return b.start()
 end
@@ -227,6 +227,21 @@ catch _e
 end
 
 # =========================================================================
+# C07b: builder method chaining
+# =========================================================================
+section("C07b builder method chaining")
+try
+    var b07b = new process.builder
+    b07b.cmd("echo chained").shell(default_shell()).merge_output(true)
+    var p07b = b07b.start()
+    var r07b = p07b.communicate()
+    check_eq("C07b builder exit code", r07b[2], 0)
+    check("C07b builder stdout non-empty", r07b[0] != "")
+catch _e
+    check("C07b unexpected exception: " + _e, false)
+end
+
+# =========================================================================
 # C08: multiple sequential processes (resource leak check)
 # =========================================================================
 section("C08 sequential processes")
@@ -308,9 +323,7 @@ try
     var fout = process.async.fstream(outpath, "w+")
 
     var b12 = new process.builder
-    b12.cmd("echo")
-    b12.arg({"c12_redirected_stdout"})
-    b12.redirect_out(fout)
+    b12.shell(default_shell()).cmd("echo").arg({"c12_redirected_stdout"}).redirect_out(fout)
     var p12 = b12.start()
     p12.wait()
     fout.close()

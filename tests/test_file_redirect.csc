@@ -42,7 +42,7 @@ end
 
 function enable_shell(b)
     try
-        b.use_shell(shell_prog())
+        b.shell(shell_prog())
         return true
     catch _e1
     end
