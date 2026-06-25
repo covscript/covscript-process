@@ -94,9 +94,9 @@ namespace mpp_impl {
 		}
 
 		// stderr: merge into stdout, inherit from parent, redirect to a file, or use its own pipe
-		if (startup.merge_outputs || startup.inherit_stdout) {
+		if (startup.merge_outputs) {
 			// merge: child stderr → same destination as child stdout
-			si.hStdError = startup.inherit_stdout ? GetStdHandle(STD_OUTPUT_HANDLE) : pstdout[PIPE_WRITE];
+			si.hStdError = pstdout[PIPE_WRITE];
 		}
 		else if (startup.inherit_stderr) {
 			si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -193,6 +193,12 @@ namespace mpp_impl {
 						auto eq = entry.find('=');
 						if (eq != std::string::npos && eq > 0)
 							effective.emplace(entry.substr(0, eq), entry.substr(eq + 1));
+						else if (eq == 0) {
+							// Windows hidden variable: =X:=value (current dir per drive)
+							auto eq2 = entry.find('=', 1);
+							if (eq2 != std::string::npos && eq2 > 1)
+								effective.emplace(entry.substr(0, eq2), entry.substr(eq2 + 1));
+						}
 						p += static_cast<ptrdiff_t>(entry.size()) + 1;
 					}
 					FreeEnvironmentStrings(parent_env);
@@ -206,8 +212,8 @@ namespace mpp_impl {
 			}
 
 			const size_t max_object_size = static_cast<size_t>(std::numeric_limits<std::ptrdiff_t>::max());
-			// starting from 1, which is the block terminator '\0'
-			size_t env_size = 1;
+			// Non-empty blocks need one extra trailing NUL; empty blocks are just "\0\0".
+			size_t env_size = effective.empty() ? 2 : 1;
 			for (const auto &e : effective) {
 				const size_t key_size = e.first.length();
 				const size_t value_size = e.second.length();
@@ -234,6 +240,8 @@ namespace mpp_impl {
 				*p++ = '\0'; // variable terminator
 			}
 			*p++ = '\0'; // block terminator
+			if (effective.empty())
+				*p++ = '\0'; // empty block needs a second NUL
 
 			// ensure envs are copied correctly
 			if (p != envs + env_size) {

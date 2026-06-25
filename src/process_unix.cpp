@@ -69,12 +69,14 @@ namespace mpp_impl {
 		// macOS: /dev/fd is reliable — opendir's fd is tracked separately.
 		DIR *dp = opendir(FD_DIR);
 		if (dp != nullptr) {
+			int dir_fd = dirfd(dp);
 			struct dirent *entry;
 			while ((entry = readdir(dp)) != nullptr) {
 				int fd;
 				if (std::isdigit(entry->d_name[0])
 				        && (fd = strtol(entry->d_name, nullptr, 10)) >= from_fd
-				        && fd != fail_fd) {
+				        && fd != fail_fd
+				        && fd != dir_fd) {
 					close(fd);
 				}
 			}

@@ -122,6 +122,9 @@ namespace mpp_impl {
 			auto status = poll_process_status(info._pid);
 			if (status.has_value()) {
 				exit_code = status.value();
+				// poll_process_status() uses WNOWAIT; reap the zombie here
+				siginfo_t si;
+				waitid(P_PID, info._pid, &si, WEXITED | WNOHANG);
 				return true;
 			}
 			if (errno == ECHILD) {
@@ -142,6 +145,9 @@ namespace mpp_impl {
 		auto status = poll_process_status(info._pid);
 		if (status.has_value()) {
 			exit_code = status.value();
+			// poll_process_status() uses WNOWAIT; reap the zombie here
+			siginfo_t si;
+			waitid(P_PID, info._pid, &si, WEXITED | WNOHANG);
 			return true;
 		}
 		if (errno == ECHILD) {
