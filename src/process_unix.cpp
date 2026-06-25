@@ -84,9 +84,21 @@ namespace mpp_impl {
 #endif
 
 #ifdef __linux__
-		// Linux 5.9+: use close_range(2) for O(1) close
-		if (syscall(SYS_close_range, from_fd, ~0U, 0) == 0)
-			return;
+		// Linux 5.9+: use close_range(2) for O(1) close.
+		// close_range closes a contiguous range, so split around
+		// fail_fd to preserve it (matching the generic fallback).
+		if (fail_fd < from_fd) {
+			// fail_fd is below the range; close everything at once
+			if (syscall(SYS_close_range, from_fd, ~0U, 0) == 0)
+				return;
+		}
+		else {
+			// Close [from_fd, fail_fd-1] then [fail_fd+1, ~0U]
+			if (from_fd < fail_fd)
+				syscall(SYS_close_range, from_fd, fail_fd - 1, 0);
+			if (syscall(SYS_close_range, fail_fd + 1, ~0U, 0) == 0)
+				return;
+		}
 #endif
 
 		// Generic fallback: brute-force iterate up to the fd limit.
