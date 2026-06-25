@@ -181,15 +181,15 @@ CNI_ROOT_NAMESPACE {
 				uv_fs_req_cleanup(&req);
 				return cs::null_pointer;
 			}
-			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
-				return cs::null_pointer;
-
+			const bool on_time = uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms);
 			const int n = state.result;
 			if (n > 0)
 			{
 				f->advance_read(n);
 				return cs::var::make<std::string>(std::string(buf.data(), n));
 			}
+			if (!on_time)
+				return cs::null_pointer;
 			if (n < 0) return cs::null_pointer;
 			// n == 0: EOF
 			return cs::var::make<std::string>(std::string{});
@@ -217,10 +217,14 @@ CNI_ROOT_NAMESPACE {
 				uv_fs_req_cleanup(&req);
 				return -1;
 			}
-			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
+			const bool on_time = uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms);
+			if (state.result > 0) {
+				if (!f->is_append())
+					f->advance_write(state.result);
+				return state.result;
+			}
+			if (!on_time)
 				return -1;
-			if (state.result > 0 && !f->is_append())
-				f->advance_write(state.result);
 			return state.result;
 		})
 		// flush(deadline_ms): flush write buffers. Returns true on success.
@@ -240,7 +244,10 @@ CNI_ROOT_NAMESPACE {
 				uv_fs_req_cleanup(&req);
 				return false;
 			}
-			if (!uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms))
+			const bool on_time = uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms);
+			if (state.result >= 0)
+				return true;
+			if (!on_time)
 				return false;
 			return state.result >= 0;
 		})

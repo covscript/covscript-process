@@ -49,7 +49,7 @@ namespace mpp_impl {
 	 * Close all file descriptors >= from_fd, except fail_fd.
 	 *
 	 * Strategy varies by platform:
-	 *   - Linux (kernel 5.9+): use close_range(2) syscall for O(1) close.
+	 *   - Linux: try close_range(2) syscall (available since kernel 5.9)
 	 *   - macOS / Darwin: enumerate /dev/fd — reliable because opendir on
 	 *     Darwin uses a stable internal fd that won't collide with the fds
 	 *     we're closing.
@@ -81,6 +81,12 @@ namespace mpp_impl {
 			closedir(dp);
 			return;
 		}
+#endif
+
+#ifdef __linux__
+		// Linux 5.9+: use close_range(2) for O(1) close
+		if (syscall(SYS_close_range, from_fd, ~0U, 0) == 0)
+			return;
 #endif
 
 		// Generic fallback: brute-force iterate up to the fd limit.

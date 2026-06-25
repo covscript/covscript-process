@@ -18,8 +18,9 @@
 #include <mozart++/fdstream>
 
 #ifdef MOZART_PLATFORM_WIN32
-// Windows.h is already pulled in by mozart++/core → mpp_foundation/io.hpp
+// Windows.h is already pulled in by mozart++/fdstream → mpp_foundation/io.hpp
 #include <io.h>
+#include <fcntl.h> // _O_RDONLY, _O_WRONLY, _O_RDWR
 #else
 #include <fcntl.h>
 #include <unistd.h>
@@ -294,7 +295,12 @@ namespace mpp {
 			if (f->is_readable() && f->is_writable()) fl = _O_RDWR;
 			else if (f->is_readable())                fl = _O_RDONLY;
 			else                                      fl = _O_WRONLY;
-			f->set_uv_fd(_open_osfhandle(reinterpret_cast<intptr_t>(h), fl));
+			const intptr_t os_fd = _open_osfhandle(reinterpret_cast<intptr_t>(h), fl);
+			if (os_fd == -1) {
+				CloseHandle(h);
+				mpp::throw_ex<mpp::runtime_error>("_open_osfhandle failed for file handle");
+			}
+			f->set_uv_fd(os_fd);
 		}
 
 		if (append_mode) {

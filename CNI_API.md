@@ -21,7 +21,7 @@ var r2 = p.start().communicate()
 
 ## 兼容性
 
-Process Extension 的 CNI 接口**完全向后兼容**——旧有接口全部保留，签名与语义不变；仅新增能力。
+Process Extension 的 CNI 接口向后兼容：旧有接口全部保留，签名与语义保持不变；仅新增能力。
 
 | 类别 | Legacy 接口 | Modern 新增 |
 |------|-------------|-------------|
@@ -88,16 +88,16 @@ Legacy 接口静默忽略第二次及后续调用；Modern 接口抛出异常。
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `cmd` | `(value: str)` | 设置可执行文件路径 |
-| `arg` | `(values: array)` | 设置参数列表（最多调用一次，重复调用抛异常） |
+| `arg` | `(values: array)` | 设置参数列表（最多调用一次，重复调用抛出 **native 异常** `mpp::runtime_error`，该异常**不可被 CovScript `try/catch` 捕获**，会导致脚本终止） |
 | `dir` | `(value: str)` | 设置工作目录 |
 | `env` | `(key: str, value: str)` | 设置环境变量（可多次调用，逐次累积） |
 | `inherit_env` | `(value: bool)` | 是否继承父进程环境（默认 true） |
 | `inherit_output` | `(value: bool)` | 子进程 stdout/stderr 复用父进程终端 |
 | `merge_output` | `(value: bool)` | stderr 合并到 stdout |
 | `shell` | `(program: str)` | 启用 shell 模式，传入 shell 程序路径（如 `"cmd"` 或 `"/bin/sh"`） |
-| `redirect_in` | `(file: file_t)` | 子进程 stdin 从 file_t 读取 |
-| `redirect_out` | `(file: file_t)` | 子进程 stdout 写入 file_t |
-| `redirect_err` | `(file: file_t)` | 子进程 stderr 写入 file_t |
+| `redirect_in` | `(file: file_t)` | 子进程 stdin 从 file_t 读取（file_t 未打开读取时抛出 native 异常） |
+| `redirect_out` | `(file: file_t)` | 子进程 stdout 写入 file_t（file_t 未打开写入时抛出 native 异常） |
+| `redirect_err` | `(file: file_t)` | 子进程 stderr 写入 file_t（file_t 未打开写入时抛出 native 异常） |
 | `start` | `() -> process_t` | 启动进程 |
 
 示例：

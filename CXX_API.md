@@ -274,7 +274,7 @@ struct process_info {
 | 进程树终止 | `CreateToolhelp32Snapshot` 枚举子进程 | `kill(-pgid)` |
 | 环境变量 | `GetEnvironmentStrings` + `CreateProcess` | `environ` + `fork` 前构建 |
 | 命令行引号 | MSVCRT 规则（反斜杠-引号双写） | 无特殊处理 |
-| fd 清理 | N/A（句柄继承控制） | `close_range()` (Linux 5.9+) / `/dev/fd` (macOS) / brute-force |
+| fd 清理 | N/A（句柄继承控制） | `close_range(2)` (Linux) / `/dev/fd` (macOS) / brute-force |
 
 ---
 

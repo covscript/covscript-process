@@ -49,7 +49,9 @@ namespace mpp_impl {
 		else if (startup._stdin.redirected()) {
 			// Redirected: PIPE_READ == PIPE_WRITE == the file handle.
 			// Ensure it is inheritable so the child can read from it.
-			SetHandleInformation(pstdin[PIPE_READ], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+			if (!SetHandleInformation(pstdin[PIPE_READ], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+				mpp::throw_ex<mpp::runtime_error>("unable to set handle information on redirected stdin");
+			}
 			si.hStdInput = pstdin[PIPE_READ];
 		}
 		else {
@@ -102,7 +104,9 @@ namespace mpp_impl {
 		else if (startup._stderr.redirected()) {
 			// Redirected: PIPE_WRITE == the file handle.
 			// Ensure it is inheritable so the child can write to it.
-			SetHandleInformation(pstderr[PIPE_WRITE], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+			if (!SetHandleInformation(pstderr[PIPE_WRITE], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+				mpp::throw_ex<mpp::runtime_error>("unable to set handle information on redirected stderr");
+			}
 			si.hStdError = pstderr[PIPE_WRITE];
 		}
 		else {
