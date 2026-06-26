@@ -52,7 +52,7 @@ system.out.println(r[0])
 
 | API | 阻塞行为 |
 |---|---|
-| `wait()` / `communicate()` | 真正的内核阻塞，会挂起当前 OS 线程，不让步给同线程的 fiber / 事件循环 |
+| `wait()` / `communicate()` | 普通上下文：内核阻塞并挂起当前 OS 线程；fiber 上下文：提交到 libuv 线程池并协作 yield，不阻塞同线程其他 fiber |
 | `wait_poll(timeout, interval)` | 在 CNI 层按 `interval` 轮询。若 SDK 支持 fiber 且当前正运行在 fiber 中，则自动调用 `cs::fiber::yield()` 让出执行权；否则 `sleep_for(interval)` |
 | `wait_with(timeout, callback)` | 同样按超时窗口轮询，但每轮迭代调用 `callback()` 替代 yield/sleep。把宿主框架自己的调度原语（事件循环 tick、`runtime.delay`、自定义 fiber yield 等）传进来即可无侵入嵌入 |
 
