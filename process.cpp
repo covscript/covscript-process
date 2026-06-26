@@ -69,38 +69,81 @@ struct uv_fs_op_state {
 	int result = UV_ECANCELED;
 };
 
-static inline void uv_fs_complete(uv_fs_t *req)
+// Heap-allocated bundle for asynchronous filesystem requests.
+// When the deadline expires and uv_cancel fails (UV_EBUSY — request already
+// executing), the caller can return immediately by setting returned_early.
+// The completion callback then takes ownership and deletes the bundle,
+// avoiding use-after-free of stack-allocated req/state.
+struct uv_fs_request {
+	uv_fs_t req;
+	uv_fs_op_state state;
+	bool returned_early = false;
+	std::string write_data;  // owned copy for write buffer lifetime
+};
+
+static void uv_fs_complete(uv_fs_t *req)
 {
-	auto *state = static_cast<uv_fs_op_state *>(req->data);
-	state->result = static_cast<int>(req->result);
-	state->done = true;
+	auto *bundle = static_cast<uv_fs_request *>(req->data);
+	bundle->state.result = static_cast<int>(req->result);
+	bundle->state.done = true;
 	uv_fs_req_cleanup(req);
+	if (bundle->returned_early) {
+		// Caller already returned; we own the bundle.
+		delete bundle;
+	}
 }
 
-static inline bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_t *req,
-        uv_fs_op_state &state, int deadline_ms)
+// Wait for a filesystem request to complete, with an optional deadline.
+//
+// Returns true if the operation completed before the deadline.
+// Returns false if the deadline was reached (even if cancel failed and we
+// had to wait for completion).
+//
+// When can_return_early is true and uv_cancel fails with UV_EBUSY,
+// this function returns false immediately after setting returned_early
+// on the bundle — the completion callback will delete the bundle later.
+// This is safe for write/flush where no stack buffer is at risk.
+//
+// When can_return_early is false (read path), cancel failure still waits
+// for completion because the read buffer is stack-allocated, but the
+// deadline is correctly recorded and false is returned.
+static bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_request *bundle,
+                                     int deadline_ms, bool can_return_early)
 {
-	bool canceled = false;
+	bool deadline_reached = false;
 	const bool has_deadline = deadline_ms >= 0;
 	const auto deadline = std::chrono::steady_clock::now()
 	                      + std::chrono::milliseconds(has_deadline ? deadline_ms : 0);
 
-	while (!state.done) {
+	while (!bundle->state.done) {
 		uv_run(loop, UV_RUN_NOWAIT);
-		if (state.done) break;
+		if (bundle->state.done) break;
 
-		if (has_deadline && !canceled && std::chrono::steady_clock::now() >= deadline) {
-			// Best-effort cancel: if the request is already executing (UV_EBUSY),
-			// we can't abort early because req/state are stack-allocated and must
-			// stay alive until the completion callback runs.
-			if (uv_cancel(reinterpret_cast<uv_req_t *>(req)) == 0)
-				canceled = true;
+		if (has_deadline && !deadline_reached
+		        && std::chrono::steady_clock::now() >= deadline) {
+			deadline_reached = true;
+			const int cancel_rc = uv_cancel(
+			                          reinterpret_cast<uv_req_t *>(&bundle->req));
+			if (cancel_rc == 0) {
+				// Cancel succeeded — callback fires with UV_ECANCELED.
+				// Continue looping to collect the callback.
+				continue;
+			}
+			// Cancel failed (UV_EBUSY): request is already executing.
+			if (can_return_early) {
+				// Caller's buffers are stable; return immediately.
+				// Completion callback will delete the bundle.
+				bundle->returned_early = true;
+				return false;
+			}
+			// Read path: buffer is stack-allocated, must wait for
+			// completion, but deadline_reached is recorded.
 		}
 
 		cs_runtime_yield(1);
 	}
 
-	return !(has_deadline && canceled);
+	return !deadline_reached;
 }
 
 static inline uv_file to_uv_file(const mpp::file_ptr &f)
@@ -170,90 +213,152 @@ CNI_ROOT_NAMESPACE {
 
 			std::vector<char> buf(size);
 			uv_buf_t iov = uv_buf_init(buf.data(), size);
-			uv_fs_t req{};
-			uv_fs_op_state state{};
-			req.data = &state;
+			auto *bundle = new uv_fs_request{};
+			bundle->req.data = bundle;
 			const uv_file ufd = to_uv_file(f);
-			if (ufd < 0) return cs::null_pointer;
+			if (ufd < 0)
+			{
+				delete bundle;
+				return cs::null_pointer;
+			}
 
 			const int submit = uv_fs_read(
-			                       uv_default_loop(), &req, ufd, &iov, 1,
+			                       uv_default_loop(), &bundle->req, ufd, &iov, 1,
 			                       static_cast<int64_t>(f->read_position()), uv_fs_complete);
 			if (submit < 0)
 			{
-				uv_fs_req_cleanup(&req);
+				uv_fs_req_cleanup(&bundle->req);
+				delete bundle;
 				return cs::null_pointer;
 			}
-			const bool on_time = uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms);
-			const int n = state.result;
+			// can_return_early=false: read buffer is stack-allocated,
+			// must wait for completion even if cancel fails.
+			uv_wait_fs_with_deadline(
+			    uv_default_loop(), bundle, deadline_ms, false);
+			const int n = bundle->state.result;
+			delete bundle;
 			if (n > 0)
 			{
 				f->advance_read(n);
 				return cs::var::make<std::string>(std::string(buf.data(), n));
 			}
-			if (!on_time)
-				return cs::null_pointer;
-			if (n < 0) return cs::null_pointer;
-			// n == 0: EOF
-			return cs::var::make<std::string>(std::string{});
+			// n == 0: EOF — return empty string even if the deadline was
+			// reached, so callers can distinguish EOF from timeout/error.
+			if (n == 0)
+				return cs::var::make<std::string>(std::string{});
+			// n < 0: error or timeout.
+			return cs::null_pointer;
 		})
 		// write(data, deadline_ms): write data to the file.
-		// Returns bytes written or -1 on error.
+		// Returns bytes written, or -1 on error / timeout.
+		//
+		// When a deadline is set and the write is still executing when the
+		// deadline fires, uv_cancel races with the worker thread. If cancel
+		// wins the data is never written; if the worker wins the OS write
+		// completes but we return -1 anyway because the caller has already
+		// exceeded its time budget. Callers that retry on -1 should be aware
+		// that the original write may have partially or fully succeeded.
 		CNI_V(write, [](file_t &f, const std::string &data, int deadline_ms) -> int {
 			if (!f || !f->is_writable()) return -1;
 
-			uv_buf_t iov = uv_buf_init(const_cast<char *>(data.data()), static_cast<unsigned int>(data.size()));
-			uv_fs_t req{};
-			uv_fs_op_state state{};
-			req.data = &state;
+			const bool has_deadline = deadline_ms >= 0;
+			// Copy write data into the bundle only when a deadline may
+			// trigger an early return. Without a deadline we always wait
+			// for completion, so the caller's string reference is safe.
+			// Copy before allocation so std::bad_alloc doesn't leak.
+			std::string data_copy;
+			if (has_deadline)
+				data_copy = data;
+			auto *bundle = new uv_fs_request{};
+			bundle->req.data = bundle;
+			bundle->write_data = std::move(data_copy);
+			const char *buf_ptr = has_deadline ? bundle->write_data.data() : data.data();
+			const auto buf_size = has_deadline ? bundle->write_data.size() : data.size();
+			uv_buf_t iov = uv_buf_init(const_cast<char *>(buf_ptr),
+			                           static_cast<unsigned int>(buf_size));
 			const uv_file ufd = to_uv_file(f);
-			if (ufd < 0) return -1;
+			if (ufd < 0)
+			{
+				delete bundle;
+				return -1;
+			}
 
 			// In append mode, pass -1 so the OS writes at the end of the file.
 			// Using write_position() would overwrite from position 0 instead.
 			const int64_t offset = f->is_append() ? -1 : f->write_position();
 			const int submit = uv_fs_write(
-			                       uv_default_loop(), &req, ufd, &iov, 1,
+			                       uv_default_loop(), &bundle->req, ufd, &iov, 1,
 			                       offset, uv_fs_complete);
 			if (submit < 0)
 			{
-				uv_fs_req_cleanup(&req);
+				uv_fs_req_cleanup(&bundle->req);
+				delete bundle;
 				return -1;
 			}
-			const bool on_time = uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms);
-			if (state.result > 0)
+			// can_return_early=true: write buffer is copied into the
+			// heap-allocated bundle, so it remains valid even if we
+			// return early and the completion callback runs later.
+			const bool on_time = uv_wait_fs_with_deadline(
+			                         uv_default_loop(), bundle, deadline_ms, true);
+			if (!bundle->state.done)
+			{
+				// returned_early: callback will delete bundle.
+				return -1;
+			}
+			const int result = bundle->state.result;
+			delete bundle;
+			if (result > 0)
 			{
 				if (!f->is_append())
-					f->advance_write(state.result);
-				return state.result;
+					f->advance_write(result);
+				return result;
 			}
 			if (!on_time)
 				return -1;
-			return state.result;
+			return result;
 		})
 		// flush(deadline_ms): flush write buffers. Returns true on success.
+		//
+		// When a deadline is set and fsync is still executing when the
+		// deadline fires, the same cancel-vs-worker race described in
+		// write() applies: if the worker wins the fsync completes but we
+		// return false because the caller has exceeded its time budget.
 		CNI_V(flush, [](file_t &f, int deadline_ms) -> bool {
 			if (!f || !f->is_writable()) return false;
 
-			uv_fs_t req{};
-			uv_fs_op_state state{};
-			req.data = &state;
+			auto *bundle = new uv_fs_request{};
+			bundle->req.data = bundle;
 			const uv_file ufd = to_uv_file(f);
-			if (ufd < 0) return false;
-
-			const int submit = uv_fs_fsync(
-			                       uv_default_loop(), &req, ufd, uv_fs_complete);
-			if (submit < 0)
+			if (ufd < 0)
 			{
-				uv_fs_req_cleanup(&req);
+				delete bundle;
 				return false;
 			}
-			const bool on_time = uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms);
-			if (state.result >= 0)
+
+			const int submit = uv_fs_fsync(
+			                       uv_default_loop(), &bundle->req, ufd, uv_fs_complete);
+			if (submit < 0)
+			{
+				uv_fs_req_cleanup(&bundle->req);
+				delete bundle;
+				return false;
+			}
+			// can_return_early=true: no buffer to protect, safe to
+			// return early on timeout.
+			const bool on_time = uv_wait_fs_with_deadline(
+			                         uv_default_loop(), bundle, deadline_ms, true);
+			if (!bundle->state.done)
+			{
+				// returned_early: callback will delete bundle.
+				return false;
+			}
+			const bool ok = bundle->state.result >= 0;
+			delete bundle;
+			if (ok)
 				return true;
 			if (!on_time)
 				return false;
-			return state.result >= 0;
+			return false;
 		})
 	}
 
