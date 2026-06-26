@@ -80,24 +80,27 @@ static inline void uv_fs_complete(uv_fs_t *req)
 static inline bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_t *req,
         uv_fs_op_state &state, int deadline_ms)
 {
-	bool timed_out = false;
+	bool canceled = false;
+	const bool has_deadline = deadline_ms >= 0;
 	const auto deadline = std::chrono::steady_clock::now()
-	                      + std::chrono::milliseconds(deadline_ms < 0 ? 0 : deadline_ms);
+	                      + std::chrono::milliseconds(has_deadline ? deadline_ms : 0);
 
 	while (!state.done) {
 		uv_run(loop, UV_RUN_NOWAIT);
 		if (state.done) break;
 
-		if (!timed_out && deadline_ms >= 0
-		        && std::chrono::steady_clock::now() >= deadline) {
-			timed_out = true;
-			uv_cancel(reinterpret_cast<uv_req_t *>(req));
+		if (has_deadline && !canceled && std::chrono::steady_clock::now() >= deadline) {
+			// Best-effort cancel: if the request is already executing (UV_EBUSY),
+			// we can't abort early because req/state are stack-allocated and must
+			// stay alive until the completion callback runs.
+			if (uv_cancel(reinterpret_cast<uv_req_t *>(req)) == 0)
+				canceled = true;
 		}
 
 		cs_runtime_yield(1);
 	}
 
-	return !timed_out;
+	return !(has_deadline && canceled);
 }
 
 static inline uv_file to_uv_file(const mpp::file_ptr &f)
