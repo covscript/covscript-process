@@ -31,7 +31,7 @@ system.out.println(p.wait())
 - `process.builder` 是类型，不是工厂函数
 - 应使用 `new process.builder` 创建实例
 - `shell(program)`：传入 shell 程序路径（如 `cmd` 或 `/bin/sh`）启用 shell 模式
-- `arg()` 每个 builder 只能调用一次，再次调用会抛异常
+- `arg()` 可多次调用，后写覆盖（last-wins）
 
 ### 快捷 shell 启动
 
