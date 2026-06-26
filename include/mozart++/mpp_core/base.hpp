@@ -108,7 +108,7 @@
 
 namespace mpp {
 	/**
-	 * Path seperator and delimiter
+	 * Path separator and delimiter
 	 */
 #ifdef MOZART_PLATFORM_WIN32
 	constexpr char path_separator = '\\';
