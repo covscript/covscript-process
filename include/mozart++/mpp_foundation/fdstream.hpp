@@ -19,6 +19,7 @@ namespace mpp {
 	class fdoutbuf : public std::streambuf {
 	private:
 		mpp::fd_type _fd;
+		bool _valid = true;
 
 	public:
 		explicit fdoutbuf(mpp::fd_type fd)
@@ -26,9 +27,22 @@ namespace mpp {
 		{
 		}
 
+		/**
+		 * Mark the underlying fd as no longer valid so that subsequent
+		 * writes are silently discarded instead of writing to a closed
+		 * or stale handle (which could be unsafe on Windows if the
+		 * handle value has been reused by the OS).
+		 */
+		void invalidate()
+		{
+			_valid = false;
+		}
+
 	protected:
 		int_type overflow(int_type c) override
 		{
+			if (!_valid)
+				return EOF;
 			if (c != EOF) {
 				char z = c;
 				if (mpp::write(_fd, &z, 1) != 1) {
@@ -41,6 +55,8 @@ namespace mpp {
 		std::streamsize xsputn(const char *s,
 		                       std::streamsize num) override
 		{
+			if (!_valid)
+				return 0;
 			if (num <= 0) return 0;
 			std::streamsize total = 0;
 			while (total < num) {
@@ -62,12 +78,25 @@ namespace mpp {
 
 	class fdostream : public std::ostream {
 	private:
+		// _buf must be declared before it is used in rdbuf(); std::ostream(nullptr)
+		// is implementation-defined but supported by all major implementations
+		// (libstdc++, libc++, MSVC). The subsequent rdbuf(&_buf) call establishes
+		// a valid streambuf before any I/O occurs.
 		fdoutbuf _buf;
 	public:
 		explicit fdostream(fd_type fd)
 			: std::ostream(nullptr), _buf(fd)
 		{
 			rdbuf(&_buf);
+		}
+
+		/**
+		 * Mark the underlying fd as no longer valid.  After this call,
+		 * writes to the stream are silently discarded.
+		 */
+		void invalidate()
+		{
+			_buf.invalidate();
 		}
 
 

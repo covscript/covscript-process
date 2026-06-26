@@ -53,7 +53,9 @@ namespace mpp {
 			return dwRead;
 		}
 		else {
-			return 0;
+			// ReadFile failure: return -1 so callers can distinguish
+			// errors from EOF (return 0), matching UNIX read(2) semantics.
+			return -1;
 		}
 	}
 
@@ -64,7 +66,9 @@ namespace mpp {
 			return dwWritten;
 		}
 		else {
-			return 0;
+			// WriteFile failure: return -1 so callers can distinguish
+			// errors from short writes, matching UNIX write(2) semantics.
+			return -1;
 		}
 	}
 

@@ -61,9 +61,8 @@ namespace mpp_impl {
 	 * closed mid-iteration, causing undefined behavior.  The strategies above
 	 * avoid this class of bug entirely.
 	 */
-	static void close_all_descriptors(int from_fd, int *fail_fd_ptr)
+	static void close_all_descriptors(int from_fd, int fail_fd)
 	{
-		int fail_fd = *fail_fd_ptr;
 
 #ifdef MOZART_PLATFORM_DARWIN
 		// macOS: /dev/fd is reliable — opendir's fd is tracked separately.
@@ -73,8 +72,11 @@ namespace mpp_impl {
 			struct dirent *entry;
 			while ((entry = readdir(dp)) != nullptr) {
 				int fd;
-				if (std::isdigit(entry->d_name[0])
-				        && (fd = strtol(entry->d_name, nullptr, 10)) >= from_fd
+				// Verify the entire name is numeric (not just the first
+				// character) before trusting strtol's output.
+				char *endp = nullptr;
+				fd = strtol(entry->d_name, &endp, 10);
+				if (*endp == '\0' && fd >= from_fd
 				        && fd != fail_fd
 				        && fd != dir_fd) {
 					close(fd);
@@ -95,17 +97,25 @@ namespace mpp_impl {
 				return;
 		}
 		else {
-			// Close [from_fd, fail_fd-1] then [fail_fd+1, ~0U]
-			if (from_fd < fail_fd)
-				syscall(SYS_close_range, from_fd, fail_fd - 1, 0);
-			if (syscall(SYS_close_range, fail_fd + 1, ~0U, 0) == 0)
+			// Close [from_fd, fail_fd-1] then [fail_fd+1, ~0U].
+			// If either close_range fails (e.g. EINTR or ENOSYS on old
+			// kernels), fall through to the generic brute-force loop.
+			bool range_ok = true;
+			if (from_fd < fail_fd) {
+				if (syscall(SYS_close_range, from_fd, fail_fd - 1, 0) != 0)
+					range_ok = false;
+			}
+			if (range_ok && syscall(SYS_close_range, fail_fd + 1, ~0U, 0) == 0)
 				return;
 		}
 #endif
 
 		// Generic fallback: brute-force iterate up to the fd limit.
+		// Cap to a reasonable maximum to guard against implementations
+		// where sysconf(_SC_OPEN_MAX) returns RLIM_INFINITY or INT_MAX.
 		int max_fd = static_cast<int>(sysconf(_SC_OPEN_MAX));
-		if (max_fd < 0) max_fd = 1024; // conservative default
+		if (max_fd < 0) max_fd = 1024;
+		else if (max_fd > 65536) max_fd = 65536;
 		for (int fd = from_fd; fd < max_fd; fd++) {
 			if (fd == fail_fd) continue;
 			close(fd); // ignore EBADF
@@ -387,8 +397,10 @@ namespace mpp_impl {
 		if (!startup.inherit_stderr && !startup.merge_outputs) close_fd(pstderr[PIPE_WRITE]);
 
 		// command-line and environments
+		// Allocate one extra slot for execve_without_shebang's argv expansion
+		// (inserts /bin/sh at argv[0] and shifts the rest right by one).
 		size_t asize = startup._cmdline.size();
-		std::vector<char *> argv(asize + 1, nullptr);
+		std::vector<char *> argv(asize + 2, nullptr);
 
 		// copy command-line arguments (points into startup._cmdline, valid after fork)
 		for (std::size_t i = 0; i < asize; ++i) {
@@ -398,7 +410,7 @@ namespace mpp_impl {
 		// prebuilt_envp was constructed by the parent before fork, no heap allocation needed here.
 
 		// close everything above stderr
-		close_all_descriptors(STDERR_FILENO + 1, &fail_fd);
+		close_all_descriptors(STDERR_FILENO + 1, fail_fd);
 
 		// change cwd
 		if (chdir(startup._cwd.c_str()) != 0) {
@@ -513,6 +525,9 @@ namespace mpp_impl {
 				mpp::throw_ex<mpp::runtime_error>("child exec failed: " + std::string(strerror(child_errno)));
 				break;
 			default:
+				// Partial or zero-length read: child died before writing
+				// the full errno.  Reap it to avoid a zombie.
+				waitpid(pid, nullptr, 0);
 				close_fd(pfail[PIPE_READ]);
 				mpp::throw_ex<mpp::runtime_error>("read failed: " + std::string(strerror(errno)));
 				break;
@@ -529,21 +544,25 @@ namespace mpp_impl {
 
 			/*
 			 * pay special attention to stderr,
-			 * there are 2 cases:
-			 *      1. redirect stderr to stdout
-			 *      2. redirect stderr to a file
+			 * there are 3 cases:
+			 *      1. merge stderr to stdout
+			 *      2. inherit stderr from parent
+			 *      3. redirect stderr to a file
 			 */
-			if (startup.merge_outputs || startup.inherit_stdout || startup.inherit_stderr) {
+			if (startup.merge_outputs || startup.inherit_stderr) {
 				// nothing to close on parent side
 			}
 			else {
-				// redirect stderr to a file
+				// stderr is either redirected or piped
 				if (!startup._stderr.redirected()) {
 					close_fd(pstderr[PIPE_WRITE]);
 				}
 			}
 
 			info._pid = pid;
+			// Record the child's start time for identity verification
+			// (PID-reuse detection in process_exited / kill_tree).
+			info._start_time = get_process_start_time(pid);
 			// Only store pipe fds that we own.  Redirect targets and inherited
 			// streams are owned by the caller (file_t / OS), so we must not
 			// close them in close_process().
@@ -551,8 +570,8 @@ namespace mpp_impl {
 			               ? FD_INVALID : pstdin[PIPE_WRITE];
 			info._stdout = (startup.inherit_stdout || startup._stdout.redirected())
 			               ? FD_INVALID : pstdout[PIPE_READ];
-			info._stderr = (startup.merge_outputs || startup.inherit_stdout
-			                || startup.inherit_stderr || startup._stderr.redirected())
+			info._stderr = (startup.merge_outputs || startup.inherit_stderr
+			                || startup._stderr.redirected())
 			               ? FD_INVALID : pstderr[PIPE_READ];
 
 			// on *nix systems, fork() doesn't create threads to run process

@@ -46,7 +46,7 @@ namespace mpp_impl {
 			mpp::throw_ex<mpp::runtime_error>("unable to bind stdout");
 		}
 
-		if (!startup.merge_outputs && !startup.inherit_stdout && !startup.inherit_stderr) {
+		if (!startup.merge_outputs && !startup.inherit_stderr) {
 			// if the user doesn't redirect stderr to stdout,
 			// we bind stderr to a new file descriptor
 			if (!redirect_or_pipe(startup._stderr, pstderr)) {
@@ -69,7 +69,7 @@ namespace mpp_impl {
 			if (!startup.inherit_stdout && !startup._stdout.redirected()) {
 				close_pipe(pstdout);
 			}
-			if (!startup.inherit_stderr && !startup.merge_outputs && !startup.inherit_stdout
+			if (!startup.inherit_stderr && !startup.merge_outputs
 			        && !startup._stderr.redirected()) {
 				close_pipe(pstderr);
 			}

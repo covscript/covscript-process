@@ -25,7 +25,7 @@
 #include <vector>
 
 namespace {
-	void terminate_by_pid(DWORD pid)
+	void terminate_by_pid(DWORD pid, UINT exit_code)
 	{
 		if (pid == 0 || pid == GetCurrentProcessId())
 			return;
@@ -34,11 +34,11 @@ namespace {
 		if (h == nullptr)
 			return;
 
-		TerminateProcess(h, 137);
+		TerminateProcess(h, exit_code);
 		CloseHandle(h);
 	}
 
-	void terminate_descendants(DWORD root_pid)
+	void terminate_descendants(DWORD root_pid, UINT exit_code)
 	{
 		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 		if (snap == INVALID_HANDLE_VALUE)
@@ -73,7 +73,7 @@ namespace {
 		}
 
 		for (auto rit = order.rbegin(); rit != order.rend(); ++rit)
-			terminate_by_pid(*rit);
+			terminate_by_pid(*rit, exit_code);
 	}
 }
 
@@ -85,6 +85,13 @@ namespace mpp_impl {
 		GetExitCodeProcess(info._pid, &code);
 		return code;
 	}
+	uint64_t get_process_start_time(int /*pid*/)
+	{
+		// Windows path currently records identity at process creation time
+		// (process_info::_start_time) and does not query it here by PID.
+		// Return 0 to signal "not recorded" for this helper.
+		return 0;
+	}
 
 	void terminate_process(const process_info &info, bool force)
 	{
@@ -94,12 +101,17 @@ namespace mpp_impl {
 
 	void terminate_process_tree(const process_info &info, bool force)
 	{
-		// force is ignored for descendants — Windows has no process-tree
-		// SIGTERM equivalent.  The exit code still follows the convention.
+		// If the root process is already gone, avoid traversing descendants by PID
+		// because the PID may have been recycled by an unrelated process tree.
+		if (process_exited(info))
+			return;
+
+		// The exit code convention is now consistently applied to both root
+		// and descendants.
 		const UINT code = force ? 137 : 143;
 		DWORD root_pid = GetProcessId(info._pid);
 		if (root_pid != 0)
-			terminate_descendants(root_pid);
+			terminate_descendants(root_pid, code);
 		TerminateProcess(info._pid, code);
 	}
 
@@ -114,8 +126,10 @@ namespace mpp_impl {
 	bool wait_timeout_ms(const process_info &info, int timeout_ms, int &exit_code,
 	                     int /*poll_interval_ms*/)
 	{
-		// Delegate directly to the OS — no polling loop needed on Windows.
-		DWORD result = WaitForSingleObject(info._pid, static_cast<DWORD>(timeout_ms));
+		// Normalize: negative timeout → INFINITE (same semantics as Unix after fix).
+		// Explicit cast avoids relying on implicit DWORD conversion of -1.
+		DWORD dwTimeout = (timeout_ms < 0) ? INFINITE : static_cast<DWORD>(timeout_ms);
+		DWORD result = WaitForSingleObject(info._pid, dwTimeout);
 		if (result == WAIT_OBJECT_0) {
 			DWORD code = 0;
 			GetExitCodeProcess(info._pid, &code);

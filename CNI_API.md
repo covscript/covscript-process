@@ -26,7 +26,7 @@ Process Extension 的 CNI 接口向后兼容：旧有接口全部保留，签名
 | 类别 | Legacy 接口 | Modern 新增 |
 |------|-------------|-------------|
 | 顶层启动 | `process.exec(cmd, args)` | `process.shell(command)` |
-| builder 配置 | `cmd`, `arg`, `dir`, `env`, `merge_output`, `start` | `shell`, `inherit_output`, `inherit_env`, `redirect_in`, `redirect_out`, `redirect_err` |
+| builder 配置 | `cmd`, `arg`, `dir`, `env`, `merge_output`, `start` | `shell`, `inherit_stdin`, `inherit_stdout`, `inherit_stderr`, `inherit_output`, `inherit_env`, `redirect_in`, `redirect_out`, `redirect_err` |
 | 进程等待 | `wait`, `has_exited` | `try_wait`, `wait_poll`, `wait_with`, `is_running` |
 | 进程控制 | `kill` | `kill_tree`, `get_pid` |
 | 进程通信 | `in`, `out`, `err` | `communicate` |
@@ -37,11 +37,11 @@ Process Extension 的 CNI 接口向后兼容：旧有接口全部保留，签名
 
 #### builder 方法链
 
-所有 builder 配置方法（`cmd`, `arg`, `dir`, `env`, `merge_output`, `shell`, `inherit_output`, `inherit_env`, `redirect_in`, `redirect_out`, `redirect_err`）均返回 builder 自身，支持链式调用。`start()` 返回 `process_t`。
+所有 builder 配置方法（`cmd`, `arg`, `dir`, `env`, `merge_output`, `shell`, `inherit_stdin`, `inherit_stdout`, `inherit_stderr`, `inherit_output`, `inherit_env`, `redirect_in`, `redirect_out`, `redirect_err`）均返回 builder 自身，支持链式调用。`start()` 返回 `process_t`。
 
 #### `arg()` 重复调用
 
-Legacy 接口静默忽略第二次及后续调用；Modern 接口抛出异常。重复 `arg()` 在原实现中即属非法操作。
+`arg()` 可以多次调用，后调用的值覆盖之前的参数列表（last-wins）。
 
 #### `process_t.wait()`
 
@@ -88,11 +88,14 @@ Legacy 接口静默忽略第二次及后续调用；Modern 接口抛出异常。
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `cmd` | `(value: str)` | 设置可执行文件路径 |
-| `arg` | `(values: array)` | 设置参数列表（最多调用一次，重复调用抛出 **native 异常** `mpp::runtime_error`，该异常**不可被 CovScript `try/catch` 捕获**，会导致脚本终止） |
+| `arg` | `(values: array)` | 设置参数列表（可多次调用，后写覆盖，last-wins） |
 | `dir` | `(value: str)` | 设置工作目录 |
-| `env` | `(key: str, value: str)` | 设置环境变量（可多次调用，逐次累积） |
+| `env` | `(key: str, value: str)` | 设置环境变量（可多次调用，**同名 key 后写覆盖前写**） |
 | `inherit_env` | `(value: bool)` | 是否继承父进程环境（默认 true） |
-| `inherit_output` | `(value: bool)` | 子进程 stdout/stderr 复用父进程终端 |
+| `inherit_stdin` | `(value: bool)` | 子进程 stdin 继承父进程终端（可独立控制，默认 false） |
+| `inherit_stdout` | `(value: bool)` | 子进程 stdout 继承父进程终端（可独立控制，默认 false） |
+| `inherit_stderr` | `(value: bool)` | 子进程 stderr 继承父进程终端（可独立控制，默认 false） |
+| `inherit_output` | `(value: bool)` | 便捷方法：同时设置 `inherit_stdout` 和 `inherit_stderr` |
 | `merge_output` | `(value: bool)` | stderr 合并到 stdout |
 | `shell` | `(program: str)` | 启用 shell 模式，传入 shell 程序路径（如 `"cmd"` 或 `"/bin/sh"`） |
 | `redirect_in` | `(file: file_t)` | 子进程 stdin 从 file_t 读取（file_t 未打开读取时抛出 native 异常） |
@@ -128,7 +131,7 @@ var r = p.communicate()  # [stdout: str, stderr: str, exit_code: int]
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `wait` | `() -> int` | 阻塞等待退出，返回 exit_code |
-| `try_wait` | `() -> int \| null` | 非阻塞检查；已退出返回 exit_code，否则返回 null。需要先通过 `wait_poll` / `wait_with` / `wait`（fiber 路径）触发内部异步等待，否则可能退化为单次 OS 查询 |
+| `try_wait` | `() -> int \| null` | 非阻塞检查；已退出返回 exit_code，否则返回 null。**高频调用前须先通过 `wait_poll` / `wait_with` / `wait`（fiber 路径）触发内部异步等待（`begin_wait()`）**：否则每次调用触发一次系统调用（Unix: `waitid(WNOWAIT)` / Windows: `WaitForSingleObject(0)`）。异步路径下为零系统调用 |
 | `wait_poll` | `(timeout_ms: int, poll_interval_ms: int) -> int \| null` | 轮询等待，超时返回 null。`poll_interval_ms` 会被 clamp 到最小 1ms。`timeout_ms < 0` 表示无限等待 |
 | `wait_with` | `(timeout_ms: int, callback: callable) -> int \| null` | 带回调的轮询等待，每轮迭代调用 `callback()` 替代 sleep/yield。`timeout_ms < 0` 无限轮询。callback 若抛异常则立即向上抛出，不隐式 kill 子进程 |
 
@@ -145,7 +148,7 @@ var r = p.communicate()  # [stdout: str, stderr: str, exit_code: int]
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `kill` | `(force: bool)` | 终止进程。`force=true` → SIGKILL（退出码 137），`force=false` → SIGTERM（退出码 143） |
-| `kill_tree` | `(force: bool)` | 终止进程及其所有子进程。对已退出进程调用不报错 |
+| `kill_tree` | `(force: bool)` | 终止进程及其所有子进程。Unix 上通过进程组（PGID）实现，调用前校验进程身份以防止 PID 复用误杀；Windows 上先检查根进程是否已退出，再枚举并终止后代，避免 PID 复用导致误杀。对已退出进程调用不报错 |
 
 ### 2.5 通信
 
@@ -190,6 +193,7 @@ process.async.fstream(path: str, mode: str) -> file_t | null
 | `"a"` | 追加，不存在则创建 |
 | `"r+"` | 读写，文件必须存在 |
 | `"w+"` | 读写，创建/截断 |
+| `"a+"` | 读写（追加），不存在则创建 |
 
 - 不可识别的 mode 抛出 **native 异常**（`mpp::runtime_error`），该异常**不可被 CovScript `try/catch` 捕获**，会导致脚本终止。请在调用侧确保 mode 合法。
 - 文件不存在或无权限返回 null。
@@ -238,12 +242,16 @@ process.async.fstream(path: str, mode: str) -> file_t | null
 ### 其他约束
 
 - 不暴露 `send_signal`。
+- `env()` 同名 key 后写覆盖前写（last-write-wins）。
 - `merge_output=true` 时，`redirect_err` 无效。
 - `inherit_output=true` 时不采集 out/err，communicate 的 out/err 为空字符串。
 - `redirect_in` / `redirect_out` / `redirect_err` 仅接受 file_t，不接受路径字符串。
 - 参数类型错误抛异常；运行时失败使用 null / false 返回值表达。
+- `wait_poll` / `wait_with` 中 `timeout_ms < 0` 表示无限等待；`timeout_ms = 0` 表示即时探测一次。
 - `wait_poll` 超时返回 null，不抛异常。
 - `wait_with` 的 callback 若抛异常，立即中断 wait_with 并向上抛出；子进程保持运行，不做隐式 kill。
+- `kill_tree` 在 Unix 上通过进程组终止；实现层面通过进程启动时间戳校验身份以防止 PID 复用误杀。
+- `arg()` 允许多次调用，后写覆盖（last-wins）。
 
 ---
 

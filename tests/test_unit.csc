@@ -312,9 +312,8 @@ end
 #   * process.exec on a missing command (throws mpp::runtime_error from the
 #     extension internals — CovScript try/catch cannot intercept native
 #     exceptions thrown from CNI bindings, so the script would abort).
-#   * arg() called twice (same reason — process_builder::arguments() throws
-#     mpp::runtime_error). The constraint is documented in process.hpp and
-#     README.md instead.
+#   * arg() called twice is now allowed (last-wins semantics); previously this
+#     threw mpp::runtime_error via the _args_set guard.
 
 # --- T20: communicate() handles large stdout (>64KB) without deadlock ---
 section("T20 large stdout via communicate()")
@@ -674,6 +673,25 @@ try
     check("large output: data received", _r37[0].size >= 1048576)
 catch _e37
     check("T37 unexpected exception", false)
+end
+
+# --- T38: env() same key override (last-write-wins) ---
+section("T38 env same key override")
+try
+    var _b38 = new process.builder
+    _b38.env("CSPROC_T38_KEY", "first")
+    _b38.env("CSPROC_T38_KEY", "second")
+    if system.is_platform_windows()
+        _b38.cmd("cmd")
+        _b38.arg({"/c", "if \"%CSPROC_T38_KEY%\"==\"second\" (exit /b 0) else (exit /b 19)"})
+    else
+        _b38.cmd("sh")
+        _b38.arg({"-c", "[ \"$CSPROC_T38_KEY\" = \"second\" ]"})
+    end
+    var _r38 = _b38.start().communicate()
+    check_eq("env override resolves to last value", _r38[2], 0)
+catch _e38
+    check("T38 unexpected exception", false)
 end
 
 # --- Summary ---

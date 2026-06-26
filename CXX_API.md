@@ -69,6 +69,7 @@ mpp::file_ptr mpp::open_file(const std::string &path, const std::string &mode);
 | `"a"` | 追加，不存在则创建 |
 | `"r+"` | 读写，文件必须存在 |
 | `"w+"` | 读写，创建/截断 |
+| `"a+"` | 读写（追加），不存在则创建 |
 
 - 返回 `std::shared_ptr<mpp::file>`，失败返回 nullptr。
 - 不可识别的 mode 抛 `mpp::runtime_error`。
@@ -187,8 +188,8 @@ Builder 模式配置进程启动参数。所有 setter 返回 `process_builder&`
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `command` | `(const std::string&) -> process_builder&` | 设置 argv[0]，可多次调用（覆盖） |
-| `arguments` | `(const Container&) -> process_builder&` | 设置参数列表（最多调用一次，否则抛异常） |
-| `environment` | `(const std::string& key, const std::string& value) -> process_builder&` | 设置环境变量 |
+| `arguments` | `(const Container&) -> process_builder&` | 设置参数列表（可多次调用，后写覆盖） |
+| `environment` | `(const std::string& key, const std::string& value) -> process_builder&` | 设置环境变量。同名 key 后写覆盖前写（last-write-wins） |
 | `directory` | `(const std::string& cwd) -> process_builder&` | 设置工作目录 |
 | `merge_outputs` | `(bool) -> process_builder&` | 合并 stderr 到 stdout |
 | `inherit_stdin` | `(bool = true) -> process_builder&` | 继承父进程 stdin |
@@ -209,9 +210,8 @@ Builder 模式配置进程启动参数。所有 setter 返回 `process_builder&`
 
 ### 3.3 arguments() 约束
 
-- 每个 `process_builder` 实例最多调用一次 `arguments()`。
-- 重复调用抛 `mpp::runtime_error`。
-- 使用显式 `_args_set` 标志追踪，不依赖 `_cmdline.size()`。
+- `arguments()` 可以多次调用，后调用的值覆盖之前的参数（last-wins）。
+- 每次调用会先清除旧的参数再追加新的，不依赖 `_cmdline.size()` 判断是否为首次调用。
 
 ---
 
@@ -260,7 +260,7 @@ struct process_info {
 | `terminate_process` | `(info, force)` | 终止进程 |
 | `terminate_process_tree` | `(info, force)` | 终止进程树 |
 | `process_exited` | `(info) -> bool` | 非阻塞检查是否退出 |
-| `wait_timeout_ms` | `(info, timeout_ms, exit_code&, poll_interval_ms) -> bool` | 带超时等待 |
+| `wait_timeout_ms` | `(info, timeout_ms, exit_code&, poll_interval_ms) -> bool` | 带超时等待。`timeout_ms < 0` 视为无限等待；`timeout_ms = 0` 仅探测一次；`timeout_ms > 0` 正常超时 |
 | `get_pid` | `(info) -> int` | 获取进程 ID |
 
 ### 4.4 平台实现差异
@@ -271,10 +271,11 @@ struct process_info {
 | 等待 | `WaitForSingleObject` | `waitid(P_PID)` |
 | 非阻塞检查 | `WaitForSingleObject(0)` | `waitid(WNOHANG\|WNOWAIT)` |
 | 超时等待 | `WaitForSingleObject(timeout)` | 轮询 `nanosleep` + `waitid` |
-| 进程树终止 | `CreateToolhelp32Snapshot` 枚举子进程 | `kill(-pgid)` |
+| 进程树终止 | `CreateToolhelp32Snapshot` 枚举子进程 | `kill(-pgid)`（同一进程组）；`terminate_process_tree` 在发送进程组信号前通过 `_start_time` 校验进程身份，防止 PID 复用误杀 |
 | 环境变量 | `GetEnvironmentStrings` + `CreateProcess` | `environ` + `fork` 前构建 |
 | 命令行引号 | MSVCRT 规则（反斜杠-引号双写） | 无特殊处理 |
 | fd 清理 | N/A（句柄继承控制） | `close_range(2)` (Linux) / `/dev/fd` (macOS) / brute-force |
+| 进程身份校验 | `GetProcessTimes` 记录 `_start_time` | `/proc/<pid>/stat` (Linux) / `sysctl KERN_PROC_PID` (macOS) 记录 `_start_time`
 
 ---
 

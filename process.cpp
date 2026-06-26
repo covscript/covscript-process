@@ -218,7 +218,8 @@ CNI_ROOT_NAMESPACE {
 				return -1;
 			}
 			const bool on_time = uv_wait_fs_with_deadline(uv_default_loop(), &req, state, deadline_ms);
-			if (state.result > 0) {
+			if (state.result > 0)
+			{
 				if (!f->is_append())
 					f->advance_write(state.result);
 				return state.result;
@@ -321,6 +322,18 @@ CNI_ROOT_NAMESPACE {
 		})
 		CNI_V(inherit_output, [](const cs::var &b, bool v) -> cs::var {
 			b.val<builder_t>().inherit_output(v);
+			return b;
+		})
+		CNI_V(inherit_stdin, [](const cs::var &b, bool v) -> cs::var {
+			b.val<builder_t>().inherit_stdin(v);
+			return b;
+		})
+		CNI_V(inherit_stdout, [](const cs::var &b, bool v) -> cs::var {
+			b.val<builder_t>().inherit_stdout(v);
+			return b;
+		})
+		CNI_V(inherit_stderr, [](const cs::var &b, bool v) -> cs::var {
+			b.val<builder_t>().inherit_stderr(v);
 			return b;
 		})
 		CNI_V(inherit_env, [](const cs::var &b, bool v) -> cs::var {

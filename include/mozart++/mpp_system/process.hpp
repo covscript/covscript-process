@@ -1,17 +1,17 @@
 /**
- * Mozart++ Template Library — forked from
- *   Chengdu Covariant Technologies Co., LTD. (2020-2021)
- *   https://covariant.cn/
- *   https://github.com/chengdu-zhirui/
- *
- * Licensed under Apache 2.0
- *
- * Copyright (C) 2017-2026 Michael Lee(李登淳)
- *
- * Email:   mikecovlee@163.com
- * Github:  https://github.com/mikecovlee
- * Website: http://covscript.org.cn
- */
+* Mozart++ Template Library — forked from
+*   Chengdu Covariant Technologies Co., LTD. (2020-2021)
+*   https://covariant.cn/
+*   https://github.com/chengdu-zhirui/
+*
+* Licensed under Apache 2.0
+*
+* Copyright (C) 2017-2026 Michael Lee(李登淳)
+*
+* Email:   mikecovlee@163.com
+* Github:  https://github.com/mikecovlee
+* Website: http://covscript.org.cn
+*/
 #pragma once
 
 #include <mozart++/core>
@@ -19,6 +19,7 @@
 #include <optional>
 #include <unordered_map>
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <sstream>
 #include <thread>
@@ -70,15 +71,26 @@ namespace mpp_impl {
 
 	struct process_info {
 		/**
+		 * Stores pid_t (Unix) or process HANDLE (Win32).
+		 * Use get_pid() for a uniform OS-level process ID.
+		 */
+		/**
 		 * Unused on *nix systems.
 		 */
 		fd_type _tid = FD_INVALID;
+
 
 		fd_type _pid = FD_INVALID;
 		fd_type _stdin = FD_INVALID;
 		fd_type _stdout = FD_INVALID;
 		fd_type _stderr = FD_INVALID;
 		bool _stdin_closed = false;
+		/**
+		 * Process creation timestamp for identity verification.
+		 * Used to detect PID reuse before sending signals to process groups.
+		 * 0 means "not recorded" (platform limitation or legacy process_info).
+		 */
+		uint64_t _start_time = 0;
 	};
 
 	void create_process_impl(const process_startup &startup,
@@ -113,6 +125,17 @@ namespace mpp_impl {
 	 * Return the OS-level process ID (integer PID on *nix, dwProcessId on Win32).
 	 */
 	int get_pid(const process_info &info);
+
+	/**
+	 * Read the creation timestamp of process @p pid for identity verification.
+	 * Returns 0 when the information cannot be obtained (platform limitation,
+	 * missing /proc, etc.).
+	 *
+	 * Linux:   reads /proc/<pid>/stat field 22 (starttime in clock ticks).
+	 * macOS:   uses sysctl KERN_PROC_PID p_starttime (sec+usec packed).
+	 * Windows: uses GetProcessTimes.
+	 */
+	uint64_t get_process_start_time(int pid);
 }
 
 namespace mpp {
@@ -136,7 +159,6 @@ namespace mpp {
 			mpp_impl::process_info *info = nullptr;
 			std::istream *stream = nullptr;
 			std::atomic<bool> done{false};
-			bool cancelled = false;
 			int exit_code = 0;
 			std::string output;
 		};
@@ -151,16 +173,15 @@ namespace mpp {
 		inline void read_work_cb(uv_work_t *req)
 		{
 			auto *w = static_cast<async_work *>(req->data);
+			assert(w->stream != nullptr);
 			std::ostringstream ss;
 			ss << w->stream->rdbuf();
 			w->output = ss.str();
 		}
 
-		inline void after_work_cb(uv_work_t *req, int status)
+		inline void after_work_cb(uv_work_t *req, int /*status*/)
 		{
 			auto *w = static_cast<async_work *>(req->data);
-			if (status == UV_ECANCELED)
-				w->cancelled = true;
 			w->done.store(true, std::memory_order_release);
 		}
 
@@ -172,6 +193,11 @@ namespace mpp {
 	using mpp_impl::process_info;
 	using mpp_impl::process_startup;
 	using mpp_impl::fd_type;
+
+	// Thread safety: mpp::process is not thread-safe. All methods must be
+	// called from the same thread that drives the libuv event loop
+	// (uv_default_loop()). Multi-threaded access requires external
+	// synchronization.
 
 	class process {
 		friend class process_builder;
@@ -200,9 +226,14 @@ namespace mpp {
 			{
 				if (!w) return;
 				uv_cancel(reinterpret_cast<uv_req_t *>(&w->req));
+				int spin_count = 0;
 				while (!w->done.load(std::memory_order_acquire)) {
 					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-					std::this_thread::yield();
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					if (++spin_count % 3000 == 0) {
+						MOZART_LOGCR("await_work spinning for too long -- "
+						             "work item not responding to cancellation");
+					}
 				}
 				w.reset();
 			}
@@ -284,6 +315,9 @@ namespace mpp {
 		{
 			if (_this->_info._stdin_closed) return;
 			_this->_info._stdin_closed = true;
+			// Invalidate the stream buffer so subsequent writes are
+			// silently discarded instead of hitting a stale/closed fd.
+			_this->_stdin.invalidate();
 			if (_this->_info._stdin != FD_INVALID) {
 				mpp_impl::close_fd(_this->_info._stdin);
 				_this->_info._stdin = FD_INVALID;
@@ -324,6 +358,8 @@ namespace mpp {
 			w->info = &_this->_info;
 			if (uv_queue_work(uv_default_loop(), &w->req,
 			                  detail::wait_work_cb, detail::after_work_cb) != 0) {
+				MOZART_LOGEV("begin_wait: uv_queue_work submission failed, "
+				             "falling back to synchronous path");
 				return; // submission failed, w is freed
 			}
 			_this->_wait_work = std::move(w);
@@ -354,6 +390,7 @@ namespace mpp {
 			if (_this->_wait_work->done.load(std::memory_order_acquire)) {
 				_this->_exit_code = _this->_wait_work->exit_code;
 				_this->_wait_work.reset();
+				_this->_observed_exited = true;
 				return true;
 			}
 			return false;
@@ -373,10 +410,11 @@ namespace mpp {
 				// Drive the loop until the work completes.
 				while (!_this->_wait_work->done.load(std::memory_order_acquire)) {
 					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-					std::this_thread::yield();
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 				}
 				_this->_exit_code = _this->_wait_work->exit_code;
 				_this->_wait_work.reset();
+				_this->_observed_exited = true;
 				return _this->_exit_code.value();
 			}
 			// Fallback: no async wait was started, do it synchronously.
@@ -395,6 +433,7 @@ namespace mpp {
 				if (_this->_wait_work->done.load(std::memory_order_acquire)) {
 					_this->_exit_code = _this->_wait_work->exit_code;
 					_this->_wait_work.reset();
+					_this->_observed_exited = true;
 					return true;
 				}
 				return false;
@@ -441,11 +480,14 @@ namespace mpp {
 
 		/**
 		 * Submit reader work for stdout/stderr and a waiter work to libuv's
-		 * thread pool; returns immediately.  Captures a stable raw pointer to
-		 * member_holder so the caller may freely move or re-seat the
-		 * shared_ptr<process> without invalidating in-flight captures.  Must
-		 * be followed by end_communicate() before the next call; the
-		 * destructor safely cancels/joins any outstanding work.
+		 * thread pool; returns immediately.  Must be followed by
+		 * end_communicate() before the next call.
+		 *
+		 * The async_work objects store raw pointers into member_holder
+		 * (e.g. w->stream = &impl->_stdout).  These pointers remain valid
+		 * because ~member_holder() calls await_work() on every outstanding
+		 * async_work before destroying any stream or fd member — the
+		 * async work is always joined before the pointee is freed.
 		 */
 		void begin_communicate()
 		{
@@ -462,6 +504,10 @@ namespace mpp {
 				                  detail::read_work_cb, detail::after_work_cb) == 0) {
 					impl->_out_work = std::move(w);
 				}
+				else {
+					MOZART_LOGEV("begin_communicate: uv_queue_work submission "
+					             "failed for stdout reader");
+				}
 			}
 			if (impl->_info._stderr != FD_INVALID && !impl->_err_work) {
 				auto w = std::make_unique<detail::async_work>();
@@ -470,6 +516,10 @@ namespace mpp {
 				if (uv_queue_work(uv_default_loop(), &w->req,
 				                  detail::read_work_cb, detail::after_work_cb) == 0) {
 					impl->_err_work = std::move(w);
+				}
+				else {
+					MOZART_LOGEV("begin_communicate: uv_queue_work submission "
+					             "failed for stderr reader");
 				}
 			}
 		}
@@ -499,7 +549,7 @@ namespace mpp {
 			if (_this->_out_work) {
 				while (!_this->_out_work->done.load(std::memory_order_acquire)) {
 					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-					std::this_thread::yield();
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 				}
 				result.out = std::move(_this->_out_work->output);
 				_this->_out_work.reset();
@@ -507,7 +557,7 @@ namespace mpp {
 			if (_this->_err_work) {
 				while (!_this->_err_work->done.load(std::memory_order_acquire)) {
 					uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-					std::this_thread::yield();
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 				}
 				result.err = std::move(_this->_err_work->output);
 				_this->_err_work.reset();
@@ -539,7 +589,6 @@ namespace mpp {
 	class process_builder {
 	private:
 		process_startup _startup;
-		bool _args_set = false;
 
 	public:
 		process_builder() = default;
@@ -571,23 +620,26 @@ namespace mpp {
 		}
 
 		/**
-		 * Append arguments after the program name. May be called AT MOST ONCE
-		 * per builder; a second call throws mpp::runtime_error.
+		 * Append arguments after the program name.  May be called multiple
+		 * times; later calls replace previously set arguments (last-wins).
 		 */
 		template <typename Container>
 		process_builder &arguments(const Container &c)
 		{
-			if (_args_set) {
-				mpp::throw_ex<mpp::runtime_error>("arguments() must be called at most once per process_builder");
-			}
-			_args_set = true;
+			if (_startup._cmdline.size() > 1)
+				_startup._cmdline.erase(_startup._cmdline.begin() + 1, _startup._cmdline.end());
 			std::copy(c.begin(), c.end(), std::back_inserter(_startup._cmdline));
 			return *this;
 		}
 
+		/**
+		 * Set an environment variable for the child process.  May be called
+		 * multiple times; later values for the same key overwrite earlier
+		 * ones (last-write-wins).
+		 */
 		process_builder &environment(const std::string &key, const std::string &value)
 		{
-			_startup._env.emplace(key, value);
+			_startup._env.insert_or_assign(key, value);
 			return *this;
 		}
 
@@ -627,6 +679,26 @@ namespace mpp {
 		process_builder &inherit_stdin(bool v = true)
 		{
 			_startup.inherit_stdin = v;
+			return *this;
+		}
+
+		/**
+		 * Inherit the parent's stdout independently (without affecting stderr).
+		 * For setting both at once, see inherit_output().
+		 */
+		process_builder &inherit_stdout(bool v = true)
+		{
+			_startup.inherit_stdout = v;
+			return *this;
+		}
+
+		/**
+		 * Inherit the parent's stderr independently (without affecting stdout).
+		 * For setting both at once, see inherit_output().
+		 */
+		process_builder &inherit_stderr(bool v = true)
+		{
+			_startup.inherit_stderr = v;
 			return *this;
 		}
 

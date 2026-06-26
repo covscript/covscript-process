@@ -49,8 +49,22 @@ namespace mpp_impl {
 		else if (startup._stdin.redirected()) {
 			// Redirected: PIPE_READ == PIPE_WRITE == the file handle.
 			// Ensure it is inheritable so the child can read from it.
-			if (!SetHandleInformation(pstdin[PIPE_READ], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
-				mpp::throw_ex<mpp::runtime_error>("unable to set handle information on redirected stdin");
+			DWORD in_flags = 0;
+			if (!GetHandleInformation(pstdin[PIPE_READ], &in_flags)) {
+				auto le = GetLastError();
+				std::string msg = "unable to query handle info on stdin redirect";
+				msg += " (err=" + std::to_string(le);
+				msg += ", h=" + std::to_string(reinterpret_cast<intptr_t>(pstdin[PIPE_READ])) + ")";
+				mpp::throw_ex<mpp::runtime_error>(msg);
+			}
+			if (!(in_flags & HANDLE_FLAG_INHERIT)) {
+				if (!SetHandleInformation(pstdin[PIPE_READ], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+					auto le = GetLastError();
+					std::string msg = "unable to set handle info on stdin redirect";
+					msg += " (err=" + std::to_string(le);
+					msg += ", h=" + std::to_string(reinterpret_cast<intptr_t>(pstdin[PIPE_READ])) + ")";
+					mpp::throw_ex<mpp::runtime_error>(msg);
+				}
 			}
 			si.hStdInput = pstdin[PIPE_READ];
 		}
@@ -90,13 +104,19 @@ namespace mpp_impl {
 			si.hStdOutput = pstdout[PIPE_WRITE];
 		}
 		else {
+			// Pipe: the write end goes to the child via StdOutput; remove
+			// inherit from the read end so the child does not unnecessarily
+			// inherit it (matching stdin's treatment of the parent end).
+			if (!SetHandleInformation(pstdout[PIPE_READ], HANDLE_FLAG_INHERIT, 0)) {
+				mpp::throw_ex<mpp::runtime_error>("unable to set handle information on stdout");
+			}
 			si.hStdOutput = pstdout[PIPE_WRITE];
 		}
 
 		// stderr: merge into stdout, inherit from parent, redirect to a file, or use its own pipe
 		if (startup.merge_outputs) {
 			// merge: child stderr → same destination as child stdout
-			si.hStdError = pstdout[PIPE_WRITE];
+			si.hStdError = si.hStdOutput;
 		}
 		else if (startup.inherit_stderr) {
 			si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -104,12 +124,32 @@ namespace mpp_impl {
 		else if (startup._stderr.redirected()) {
 			// Redirected: PIPE_WRITE == the file handle.
 			// Ensure it is inheritable so the child can write to it.
-			if (!SetHandleInformation(pstderr[PIPE_WRITE], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
-				mpp::throw_ex<mpp::runtime_error>("unable to set handle information on redirected stderr");
+			DWORD err_flags = 0;
+			if (!GetHandleInformation(pstderr[PIPE_WRITE], &err_flags)) {
+				auto le = GetLastError();
+				std::string msg = "unable to query handle info on stderr redirect";
+				msg += " (err=" + std::to_string(le);
+				msg += ", h=" + std::to_string(reinterpret_cast<intptr_t>(pstderr[PIPE_WRITE])) + ")";
+				mpp::throw_ex<mpp::runtime_error>(msg);
+			}
+			if (!(err_flags & HANDLE_FLAG_INHERIT)) {
+				if (!SetHandleInformation(pstderr[PIPE_WRITE], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+					auto le = GetLastError();
+					std::string msg = "unable to set handle info on stderr redirect";
+					msg += " (err=" + std::to_string(le);
+					msg += ", h=" + std::to_string(reinterpret_cast<intptr_t>(pstderr[PIPE_WRITE])) + ")";
+					mpp::throw_ex<mpp::runtime_error>(msg);
+				}
 			}
 			si.hStdError = pstderr[PIPE_WRITE];
 		}
 		else {
+			// Pipe: the write end goes to the child via StdError; remove
+			// inherit from the read end so the child does not unnecessarily
+			// inherit it (matching stdin's treatment of the parent end).
+			if (!SetHandleInformation(pstderr[PIPE_READ], HANDLE_FLAG_INHERIT, 0)) {
+				mpp::throw_ex<mpp::runtime_error>("unable to set handle information on stderr");
+			}
 			si.hStdError = pstderr[PIPE_WRITE];
 		}
 
@@ -250,9 +290,10 @@ namespace mpp_impl {
 		}
 
 		// Only suppress the console window when not inheriting the parent's terminal.
-		// If the caller uses inherit_output(true) or inherit_stderr=true the child should
-		// be visible in the same console window as the parent.
-		DWORD creation_flags = (startup.inherit_stdout || startup.inherit_stderr) ? 0 : CREATE_NO_WINDOW;
+		// If the caller uses any inherit flag the child should be visible in the
+		// same console window as the parent.
+		DWORD creation_flags = (startup.inherit_stdin || startup.inherit_stdout
+		                        || startup.inherit_stderr) ? 0 : CREATE_NO_WINDOW;
 
 		// CreateProcess may modify lpCommandLine; provide a writable buffer.
 		std::vector<char> cmd_buf(command.begin(), command.end());
@@ -276,20 +317,30 @@ namespace mpp_impl {
 			mpp_impl::close_fd(pstdin[PIPE_READ]);
 		if (!startup.inherit_stdout && !startup._stdout.redirected())
 			mpp_impl::close_fd(pstdout[PIPE_WRITE]);
-		if (!startup.inherit_stdout && !startup.inherit_stderr
-		        && !startup.merge_outputs && !startup._stderr.redirected())
+		if (!startup.inherit_stderr && !startup.merge_outputs
+		        && !startup._stderr.redirected())
 			mpp_impl::close_fd(pstderr[PIPE_WRITE]);
 
 		info._pid = pi.hProcess;
 		info._tid = pi.hThread;
+		// Record process creation time for diagnostics / future use.
+		// On Windows, process identity is verified via the process handle
+		// (WaitForSingleObject), which is more reliable than PID-based
+		// checks, so _start_time is not used for PID-reuse detection here
+		// (unlike the Unix implementation).
+		{
+			FILETIME ct, et, kt, ut;
+			if (GetProcessTimes(pi.hProcess, &ct, &et, &kt, &ut))
+				info._start_time = (static_cast<uint64_t>(ct.dwHighDateTime) << 32) | ct.dwLowDateTime;
+		}
 		// Only store pipe handles that we own.  Redirect targets belong to
 		// the caller's file_t and inherited handles belong to the OS.
 		info._stdin  = (startup.inherit_stdin  || startup._stdin.redirected())
 		               ? FD_INVALID : pstdin[PIPE_WRITE];
 		info._stdout = (startup.inherit_stdout || startup._stdout.redirected())
 		               ? FD_INVALID : pstdout[PIPE_READ];
-		info._stderr = (startup.merge_outputs || startup.inherit_stdout
-		                || startup.inherit_stderr || startup._stderr.redirected())
+		info._stderr = (startup.merge_outputs || startup.inherit_stderr
+		                || startup._stderr.redirected())
 		               ? FD_INVALID : pstderr[PIPE_READ];
 	}
 

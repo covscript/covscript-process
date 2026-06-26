@@ -246,6 +246,7 @@ namespace mpp {
 	 *   "a"   — append-only, create if absent
 	 *   "r+"  — read+write, file must exist
 	 *   "w+"  — read+write, create/truncate
+	 *   "a+"  — read+write (append), create if absent
 	 *
 	 * Returns a valid file_ptr on success, an empty file_ptr (nullptr) on failure.
 	 * Throws mpp::runtime_error for unrecognised mode strings.
@@ -254,8 +255,8 @@ namespace mpp {
 	{
 		const bool read_only   = (mode == "r");
 		const bool write_only  = (mode == "w" || mode == "a");
-		const bool read_write  = (mode == "r+" || mode == "w+");
-		const bool append_mode = (mode == "a");
+		const bool read_write  = (mode == "r+" || mode == "w+" || mode == "a+");
+		const bool append_mode = (mode == "a" || mode == "a+");
 		const bool create_trunc = (mode == "w" || mode == "w+");
 
 		if (!read_only && !write_only && !read_write)
@@ -314,7 +315,8 @@ namespace mpp {
 		else if (write_only)
 			flags |= O_WRONLY | (create_trunc ? O_CREAT | O_TRUNC : O_CREAT | O_APPEND);
 		else /* read_write */
-			flags |= O_RDWR | (create_trunc ? O_CREAT | O_TRUNC : 0);
+			flags |= O_RDWR | (create_trunc ? O_CREAT | O_TRUNC :
+			                   append_mode ? O_CREAT | O_APPEND : 0);
 
 		int fd = ::open(path.c_str(), flags, 0666);
 		if (fd < 0) return {};
