@@ -36,11 +36,6 @@ namespace mpp_impl {
 		si.cb = sizeof(si);
 		si.dwFlags |= STARTF_USESTDHANDLES;
 
-		SECURITY_ATTRIBUTES sa;
-		sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-		sa.bInheritHandle = true;
-		sa.lpSecurityDescriptor = nullptr;
-
 		// stdin: either inherit from parent terminal, redirect from a file handle,
 		// or use a pipe.
 		if (startup.inherit_stdin) {
