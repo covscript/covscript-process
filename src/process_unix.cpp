@@ -357,20 +357,20 @@ namespace mpp_impl {
 		int fail_fd = pfail[PIPE_WRITE];
 
 		// Close ends the child doesn't need (for inherited streams these are FD_INVALID → no-op)
-		if (!startup.inherit_stdin && !startup._stdin.redirected()) {
+		if (!startup._inherit_stdin && !startup._stdin.redirected()) {
 			close_fd(pstdin[PIPE_WRITE]);
 		}
-		if (!startup.inherit_stdout && !startup._stdout.redirected()) {
+		if (!startup._inherit_stdout && !startup._stdout.redirected()) {
 			close_fd(pstdout[PIPE_READ]);
 		}
 
 		// Set up stdin
-		if (!startup.inherit_stdin) {
+		if (!startup._inherit_stdin) {
 			dup2(pstdin[PIPE_READ], STDIN_FILENO);
 		}
 
 		// Set up stdout
-		if (!startup.inherit_stdout) {
+		if (!startup._inherit_stdout) {
 			dup2(pstdout[PIPE_WRITE], STDOUT_FILENO);
 		}
 
@@ -380,11 +380,11 @@ namespace mpp_impl {
 		 *   2. inherit_stderr: leave as-is
 		 *   3. normal: connect to its own pipe
 		 */
-		if (startup.merge_outputs) {
+		if (startup._merge_outputs) {
 			// STDOUT_FILENO is already set up (either inherited or duped)
 			dup2(STDOUT_FILENO, STDERR_FILENO);
 		}
-		else if (!startup.inherit_stderr) {
+		else if (!startup._inherit_stderr) {
 			if (!startup._stderr.redirected()) {
 				close_fd(pstderr[PIPE_READ]);
 			}
@@ -392,9 +392,9 @@ namespace mpp_impl {
 		}
 		// if inherit_stderr: leave STDERR_FILENO pointing at parent's stderr
 
-		if (!startup.inherit_stdin)  close_fd(pstdin[PIPE_READ]);
-		if (!startup.inherit_stdout) close_fd(pstdout[PIPE_WRITE]);
-		if (!startup.inherit_stderr && !startup.merge_outputs) close_fd(pstderr[PIPE_WRITE]);
+		if (!startup._inherit_stdin)  close_fd(pstdin[PIPE_READ]);
+		if (!startup._inherit_stdout) close_fd(pstdout[PIPE_WRITE]);
+		if (!startup._inherit_stderr && !startup._merge_outputs) close_fd(pstderr[PIPE_WRITE]);
 
 		// command-line and environments
 		// Allocate one extra slot for execve_without_shebang's argv expansion
@@ -535,10 +535,10 @@ namespace mpp_impl {
 
 			close_fd(pfail[PIPE_READ]);
 
-			if (!startup.inherit_stdin && !startup._stdin.redirected()) {
+			if (!startup._inherit_stdin && !startup._stdin.redirected()) {
 				close_fd(pstdin[PIPE_READ]);
 			}
-			if (!startup.inherit_stdout && !startup._stdout.redirected()) {
+			if (!startup._inherit_stdout && !startup._stdout.redirected()) {
 				close_fd(pstdout[PIPE_WRITE]);
 			}
 
@@ -549,7 +549,7 @@ namespace mpp_impl {
 			 *      2. inherit stderr from parent
 			 *      3. redirect stderr to a file
 			 */
-			if (startup.merge_outputs || startup.inherit_stderr) {
+			if (startup._merge_outputs || startup._inherit_stderr) {
 				// nothing to close on parent side
 			}
 			else {
@@ -566,11 +566,11 @@ namespace mpp_impl {
 			// Only store pipe fds that we own.  Redirect targets and inherited
 			// streams are owned by the caller (file_t / OS), so we must not
 			// close them in close_process().
-			info._stdin  = (startup.inherit_stdin  || startup._stdin.redirected())
+			info._stdin  = (startup._inherit_stdin  || startup._stdin.redirected())
 			               ? FD_INVALID : pstdin[PIPE_WRITE];
-			info._stdout = (startup.inherit_stdout || startup._stdout.redirected())
+			info._stdout = (startup._inherit_stdout || startup._stdout.redirected())
 			               ? FD_INVALID : pstdout[PIPE_READ];
-			info._stderr = (startup.merge_outputs || startup.inherit_stderr
+			info._stderr = (startup._merge_outputs || startup._inherit_stderr
 			                || startup._stderr.redirected())
 			               ? FD_INVALID : pstderr[PIPE_READ];
 

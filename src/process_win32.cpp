@@ -66,7 +66,7 @@ namespace mpp_impl {
 
 		// stdin: either inherit from parent terminal, redirect from a file handle,
 		// or use a pipe.
-		if (startup.inherit_stdin) {
+		if (startup._inherit_stdin) {
 			HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
 			ensure_handle_inheritable(h, "stdin");
 			si.hStdInput = h;
@@ -103,7 +103,7 @@ namespace mpp_impl {
 		}
 
 		// stdout: inherit from parent terminal, redirect to a file handle, or use a pipe.
-		if (startup.inherit_stdout) {
+		if (startup._inherit_stdout) {
 			HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
 			ensure_handle_inheritable(h, "stdout");
 			si.hStdOutput = h;
@@ -141,11 +141,11 @@ namespace mpp_impl {
 		}
 
 		// stderr: merge into stdout, inherit from parent, redirect to a file, or use its own pipe
-		if (startup.merge_outputs) {
+		if (startup._merge_outputs) {
 			// merge: child stderr → same destination as child stdout
 			si.hStdError = si.hStdOutput;
 		}
-		else if (startup.inherit_stderr) {
+		else if (startup._inherit_stderr) {
 			HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
 			ensure_handle_inheritable(h, "stderr");
 			si.hStdError = h;
@@ -280,15 +280,39 @@ namespace mpp_impl {
 				effective = startup._env;
 			}
 
+			// Windows requires the environment block to be sorted
+			// alphabetically by variable name (case-insensitive).
+			// Use CompareStringA with LOCALE_INVARIANT so that sort
+			// order is independent of the thread locale.  Also filter
+			// out entries with empty keys — they would produce ambiguous
+			// "=value\0" entries indistinguishable from Windows hidden
+			// drive variables.
+			std::vector<std::pair<std::string, std::string>> sorted_env;
+			sorted_env.reserve(effective.size());
+			for (const auto &e : effective) {
+				if (!e.first.empty())
+					sorted_env.emplace_back(e);
+			}
+			std::sort(sorted_env.begin(), sorted_env.end(),
+			[](const auto &a, const auto &b) {
+				return CompareStringA(
+				           LOCALE_INVARIANT,
+				           NORM_IGNORECASE,
+				           a.first.c_str(), -1,
+				           b.first.c_str(), -1) == CSTR_LESS_THAN;
+			});
+
 			const size_t max_object_size = static_cast<size_t>(std::numeric_limits<std::ptrdiff_t>::max());
 			// Non-empty blocks need one extra trailing NUL; empty blocks are just "\0\0".
-			size_t env_size = effective.empty() ? 2 : 1;
-			for (const auto &e : effective) {
+			size_t env_size = sorted_env.empty() ? 2 : 1;
+			for (const auto &e : sorted_env) {
 				const size_t key_size = e.first.length();
 				const size_t value_size = e.second.length();
 				// need 2 more, which is the '=' and variable terminator '\0'
-				if (key_size > max_object_size - env_size - 2 ||
-				        value_size > max_object_size - env_size - key_size - 2) {
+				// Guard against overflow in both the per-entry addition and
+				// the accumulated total before performing any arithmetic.
+				if (key_size > max_object_size - value_size - 2 ||
+				        env_size > max_object_size - key_size - value_size - 2) {
 					mpp::throw_ex<mpp::runtime_error>("environment block is too large");
 				}
 				env_size += key_size + value_size + 2;
@@ -298,7 +322,7 @@ namespace mpp_impl {
 			envs = envs_owner.get();
 			char *p = envs;
 
-			for (const auto &e : effective) {
+			for (const auto &e : sorted_env) {
 				const size_t key_size = e.first.length();
 				const size_t value_size = e.second.length();
 				std::memcpy(p, e.first.data(), key_size);
@@ -309,7 +333,7 @@ namespace mpp_impl {
 				*p++ = '\0'; // variable terminator
 			}
 			*p++ = '\0'; // block terminator
-			if (effective.empty())
+			if (sorted_env.empty())
 				*p++ = '\0'; // empty block needs a second NUL
 
 			// ensure envs are copied correctly
@@ -321,8 +345,8 @@ namespace mpp_impl {
 		// Only suppress the console window when not inheriting the parent's terminal.
 		// If the caller uses any inherit flag the child should be visible in the
 		// same console window as the parent.
-		DWORD creation_flags = (startup.inherit_stdin || startup.inherit_stdout
-		                        || startup.inherit_stderr) ? 0 : CREATE_NO_WINDOW;
+		DWORD creation_flags = (startup._inherit_stdin || startup._inherit_stdout
+		                        || startup._inherit_stderr) ? 0 : CREATE_NO_WINDOW;
 
 		// CreateProcess may modify lpCommandLine; provide a writable buffer.
 		std::vector<char> cmd_buf(command.begin(), command.end());
@@ -342,11 +366,11 @@ namespace mpp_impl {
 		}
 		// Close child-side ends that the parent doesn't need.
 		// Redirect targets are owned by the caller (file_t); skip them.
-		if (!startup.inherit_stdin && !startup._stdin.redirected())
+		if (!startup._inherit_stdin && !startup._stdin.redirected())
 			mpp_impl::close_fd(pstdin[PIPE_READ]);
-		if (!startup.inherit_stdout && !startup._stdout.redirected())
+		if (!startup._inherit_stdout && !startup._stdout.redirected())
 			mpp_impl::close_fd(pstdout[PIPE_WRITE]);
-		if (!startup.inherit_stderr && !startup.merge_outputs
+		if (!startup._inherit_stderr && !startup._merge_outputs
 		        && !startup._stderr.redirected())
 			mpp_impl::close_fd(pstderr[PIPE_WRITE]);
 
@@ -364,11 +388,11 @@ namespace mpp_impl {
 		}
 		// Only store pipe handles that we own.  Redirect targets belong to
 		// the caller's file_t and inherited handles belong to the OS.
-		info._stdin  = (startup.inherit_stdin  || startup._stdin.redirected())
+		info._stdin  = (startup._inherit_stdin  || startup._stdin.redirected())
 		               ? FD_INVALID : pstdin[PIPE_WRITE];
-		info._stdout = (startup.inherit_stdout || startup._stdout.redirected())
+		info._stdout = (startup._inherit_stdout || startup._stdout.redirected())
 		               ? FD_INVALID : pstdout[PIPE_READ];
-		info._stderr = (startup.merge_outputs || startup.inherit_stderr
+		info._stderr = (startup._merge_outputs || startup._inherit_stderr
 		                || startup._stderr.redirected())
 		               ? FD_INVALID : pstderr[PIPE_READ];
 	}

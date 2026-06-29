@@ -135,6 +135,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          set -e
           CS="${{ github.workspace }}/covscript/build/bin/cs"
           export PATH="${{ github.workspace }}/covscript/build/bin:$PATH"
           "$CS" -i build/imports tests/test.csc

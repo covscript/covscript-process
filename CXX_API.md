@@ -229,11 +229,11 @@ struct process_startup {
     bool _inherit_env = true;
     std::string _cwd = ".";
     redirect_info _stdin, _stdout, _stderr;
-    bool merge_outputs = false;
-    bool inherit_stdin = false;
-    bool inherit_stdout = false;
-    bool inherit_stderr = false;
-    bool shell_mode = false;
+    bool _merge_outputs = false;
+    bool _inherit_stdin = false;
+    bool _inherit_stdout = false;
+    bool _inherit_stderr = false;
+    bool _shell_mode = false;
 };
 ```
 

@@ -59,14 +59,14 @@ namespace mpp_impl {
 		redirect_info _stdin;
 		redirect_info _stdout;
 		redirect_info _stderr;
-		bool merge_outputs = false;
+		bool _merge_outputs = false;
 		// When true the corresponding stream is inherited from the parent
 		// process rather than being connected via a pipe.
-		bool inherit_stdin = false;
-		bool inherit_stdout = false;
-		bool inherit_stderr = false;
+		bool _inherit_stdin = false;
+		bool _inherit_stdout = false;
+		bool _inherit_stderr = false;
 		// When true, the command is wrapped in a shell (sh -c / cmd /c).
-		bool shell_mode = false;
+		bool _shell_mode = false;
 	};
 
 	struct process_info {
@@ -671,7 +671,7 @@ namespace mpp {
 
 		process_builder &merge_outputs(bool r)
 		{
-			_startup.merge_outputs = r;
+			_startup._merge_outputs = r;
 			return *this;
 		}
 
@@ -680,7 +680,7 @@ namespace mpp {
 		 */
 		process_builder &inherit_stdin(bool v = true)
 		{
-			_startup.inherit_stdin = v;
+			_startup._inherit_stdin = v;
 			return *this;
 		}
 
@@ -690,7 +690,7 @@ namespace mpp {
 		 */
 		process_builder &inherit_stdout(bool v = true)
 		{
-			_startup.inherit_stdout = v;
+			_startup._inherit_stdout = v;
 			return *this;
 		}
 
@@ -700,7 +700,7 @@ namespace mpp {
 		 */
 		process_builder &inherit_stderr(bool v = true)
 		{
-			_startup.inherit_stderr = v;
+			_startup._inherit_stderr = v;
 			return *this;
 		}
 
@@ -710,8 +710,8 @@ namespace mpp {
 		 */
 		process_builder &inherit_output(bool v = true)
 		{
-			_startup.inherit_stdout = v;
-			_startup.inherit_stderr = v;
+			_startup._inherit_stdout = v;
+			_startup._inherit_stderr = v;
 			return *this;
 		}
 
@@ -729,7 +729,7 @@ namespace mpp {
 
 		process_builder &shell(std::nullptr_t)
 		{
-			_startup.shell_mode = false;
+			_startup._shell_mode = false;
 			_startup._shell_program.reset();
 			return *this;
 		}
@@ -739,7 +739,7 @@ namespace mpp {
 			if (program.empty()) {
 				mpp::throw_ex<mpp::runtime_error>("shell program cannot be empty");
 			}
-			_startup.shell_mode = true;
+			_startup._shell_mode = true;
 			_startup._shell_program = program;
 			return *this;
 		}
@@ -747,7 +747,7 @@ namespace mpp {
 		process start()
 		{
 			process_startup s = _startup;
-			if (s.shell_mode) {
+			if (s._shell_mode) {
 				if (s._cmdline.empty()) {
 					mpp::throw_ex<mpp::runtime_error>("no command specified");
 				}

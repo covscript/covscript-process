@@ -37,21 +37,21 @@ namespace mpp_impl {
 
 		// Skip pipe creation for inherited streams; the platform-specific
 		// create_process_impl will use the parent's handles directly.
-		if (!startup.inherit_stdin && !redirect_or_pipe(startup._stdin, pstdin)) {
+		if (!startup._inherit_stdin && !redirect_or_pipe(startup._stdin, pstdin)) {
 			mpp::throw_ex<mpp::runtime_error>("unable to bind stdin");
 		}
 
-		if (!startup.inherit_stdout && !redirect_or_pipe(startup._stdout, pstdout)) {
-			if (!startup.inherit_stdin) close_pipe(pstdin);
+		if (!startup._inherit_stdout && !redirect_or_pipe(startup._stdout, pstdout)) {
+			if (!startup._inherit_stdin) close_pipe(pstdin);
 			mpp::throw_ex<mpp::runtime_error>("unable to bind stdout");
 		}
 
-		if (!startup.merge_outputs && !startup.inherit_stderr) {
+		if (!startup._merge_outputs && !startup._inherit_stderr) {
 			// if the user doesn't redirect stderr to stdout,
 			// we bind stderr to a new file descriptor
 			if (!redirect_or_pipe(startup._stderr, pstderr)) {
-				if (!startup.inherit_stdin) close_pipe(pstdin);
-				if (!startup.inherit_stdout) close_pipe(pstdout);
+				if (!startup._inherit_stdin) close_pipe(pstdin);
+				if (!startup._inherit_stdout) close_pipe(pstdout);
 				mpp::throw_ex<mpp::runtime_error>("unable to bind stderr");
 			}
 		}
@@ -63,13 +63,13 @@ namespace mpp_impl {
 			// do rollback work
 			// note: we should NOT close user provided redirect target fd,
 			// let users to close.
-			if (!startup.inherit_stdin && !startup._stdin.redirected()) {
+			if (!startup._inherit_stdin && !startup._stdin.redirected()) {
 				close_pipe(pstdin);
 			}
-			if (!startup.inherit_stdout && !startup._stdout.redirected()) {
+			if (!startup._inherit_stdout && !startup._stdout.redirected()) {
 				close_pipe(pstdout);
 			}
-			if (!startup.inherit_stderr && !startup.merge_outputs
+			if (!startup._inherit_stderr && !startup._merge_outputs
 			        && !startup._stderr.redirected()) {
 				close_pipe(pstderr);
 			}

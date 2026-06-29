@@ -91,6 +91,7 @@ f.close()
 
 - Windows: 指向本地 CovScript SDK 根目录，例如 `D:/.../covscript/csdev`
 - Linux: 指向已安装 SDK 根目录，例如 `/usr/share/covscript`
+- 初始化 git 子模块: `git submodule update --init --recursive`
 
 ### Windows (MinGW)
 
