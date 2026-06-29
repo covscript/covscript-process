@@ -222,13 +222,13 @@ CNI_ROOT_NAMESPACE {
 			delete bundle;
 			if (n > 0)
 			{
-				f->advance_read(n);
-				// Data was read, but if the deadline had already been
-				// exceeded the caller should receive null per the documented
-				// timeout semantics.  The read position is still advanced so
-				// that internal offsets stay consistent.
+				// When the deadline was exceeded the caller receives null and
+				// may retry — do not advance the read position so the retry
+				// re-reads from the same offset.  The explicit offset passed to
+				// uv_fs_read makes this safe regardless of OS file position.
 				if (!on_time)
 					return cs::null_pointer;
+				f->advance_read(n);
 				return cs::var::make<std::string>(std::string(buf.data(), n));
 			}
 			// n == 0: EOF — return empty string even if the deadline was
@@ -299,14 +299,13 @@ CNI_ROOT_NAMESPACE {
 			delete bundle;
 			if (result > 0)
 			{
-				if (!f->is_append())
-					f->advance_write(result);
-				// The OS write completed, but if the deadline was exceeded
-				// the caller should receive -1 per the documented timeout
-				// semantics.  The write position is still advanced so that
-				// internal offsets stay consistent.
+				// When the deadline was exceeded the caller receives -1 and
+				// may retry — do not advance the write position so the retry
+				// writes to the same offset (overwriting the timed-out data).
 				if (!on_time)
 					return -1;
+				if (!f->is_append())
+					f->advance_write(result);
 				return result;
 			}
 			if (!on_time)
