@@ -70,14 +70,12 @@ struct uv_fs_op_state {
 };
 
 // Heap-allocated bundle for asynchronous filesystem requests.
-// When the deadline expires and uv_cancel fails (UV_EBUSY — request already
-// executing), the caller can return immediately by setting returned_early.
-// The completion callback then takes ownership and deletes the bundle,
-// avoiding use-after-free of stack-allocated req/state.
+// uv_wait_fs_with_deadline always drains the request to completion
+// before returning, so the caller can safely delete the bundle
+// immediately after the wait returns — no deferred cleanup is needed.
 struct uv_fs_request {
 	uv_fs_t req;
 	uv_fs_op_state state;
-	bool returned_early = false;
 	std::string write_data;  // owned copy for write buffer lifetime
 };
 
@@ -87,10 +85,6 @@ static void uv_fs_complete(uv_fs_t *req)
 	bundle->state.result = static_cast<int>(req->result);
 	bundle->state.done = true;
 	uv_fs_req_cleanup(req);
-	if (bundle->returned_early) {
-		// Caller already returned; we own the bundle.
-		delete bundle;
-	}
 }
 
 // Wait for a filesystem request to complete, with an optional deadline.
@@ -99,16 +93,12 @@ static void uv_fs_complete(uv_fs_t *req)
 // Returns false if the deadline was reached (even if cancel failed and we
 // had to wait for completion).
 //
-// When can_return_early is true and uv_cancel fails with UV_EBUSY,
-// this function returns false immediately after setting returned_early
-// on the bundle — the completion callback will delete the bundle later.
-// This is safe for write/flush where no stack buffer is at risk.
-//
-// When can_return_early is false (read path), cancel failure still waits
-// for completion because the read buffer is stack-allocated, but the
-// deadline is correctly recorded and false is returned.
+// When uv_cancel fails with UV_EBUSY the request is already executing;
+// we continue driving the loop until completion to ensure the callback
+// fires and cleans up libuv resources. The caller always owns the bundle
+// after this function returns.
 static bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_request *bundle,
-                                     int deadline_ms, bool can_return_early)
+                                     int deadline_ms)
 {
 	bool deadline_reached = false;
 	const bool has_deadline = deadline_ms >= 0;
@@ -130,14 +120,8 @@ static bool uv_wait_fs_with_deadline(uv_loop_t *loop, uv_fs_request *bundle,
 				continue;
 			}
 			// Cancel failed (UV_EBUSY): request is already executing.
-			if (can_return_early) {
-				// Caller's buffers are stable; return immediately.
-				// Completion callback will delete the bundle.
-				bundle->returned_early = true;
-				return false;
-			}
-			// Read path: buffer is stack-allocated, must wait for
-			// completion, but deadline_reached is recorded.
+			// Continue driving the loop until completion so the callback
+			// fires and cleans up libuv resources.
 		}
 
 		cs_runtime_yield(1);
@@ -231,10 +215,9 @@ CNI_ROOT_NAMESPACE {
 				delete bundle;
 				return cs::null_pointer;
 			}
-			// can_return_early=false: read buffer is stack-allocated,
-			// must wait for completion even if cancel fails.
+
 			uv_wait_fs_with_deadline(
-			    uv_default_loop(), bundle, deadline_ms, false);
+			    uv_default_loop(), bundle, deadline_ms);
 			const int n = bundle->state.result;
 			delete bundle;
 			if (n > 0)
@@ -262,10 +245,10 @@ CNI_ROOT_NAMESPACE {
 			if (!f || !f->is_writable()) return -1;
 
 			const bool has_deadline = deadline_ms >= 0;
-			// Copy write data into the bundle only when a deadline may
-			// trigger an early return. Without a deadline we always wait
-			// for completion, so the caller's string reference is safe.
-			// Copy before allocation so std::bad_alloc doesn't leak.
+			// Copy write data into the bundle when a deadline is set so the
+			// buffer remains valid even if we need to wait past the deadline.
+			// Without a deadline we always wait for completion, so the
+			// caller's string reference is safe.
 			std::string data_copy;
 			if (has_deadline)
 				data_copy = data;
@@ -274,6 +257,14 @@ CNI_ROOT_NAMESPACE {
 			bundle->write_data = std::move(data_copy);
 			const char *buf_ptr = has_deadline ? bundle->write_data.data() : data.data();
 			const auto buf_size = has_deadline ? bundle->write_data.size() : data.size();
+
+			// uv_buf_init() takes unsigned int; reject oversized buffers
+			// to prevent silent truncation.
+			if (buf_size > UINT_MAX)
+			{
+				delete bundle;
+				return -1;
+			}
 			uv_buf_t iov = uv_buf_init(const_cast<char *>(buf_ptr),
 			                           static_cast<unsigned int>(buf_size));
 			const uv_file ufd = to_uv_file(f);
@@ -295,16 +286,9 @@ CNI_ROOT_NAMESPACE {
 				delete bundle;
 				return -1;
 			}
-			// can_return_early=true: write buffer is copied into the
-			// heap-allocated bundle, so it remains valid even if we
-			// return early and the completion callback runs later.
+
 			const bool on_time = uv_wait_fs_with_deadline(
-			                         uv_default_loop(), bundle, deadline_ms, true);
-			if (!bundle->state.done)
-			{
-				// returned_early: callback will delete bundle.
-				return -1;
-			}
+			                         uv_default_loop(), bundle, deadline_ms);
 			const int result = bundle->state.result;
 			delete bundle;
 			if (result > 0)
@@ -343,15 +327,9 @@ CNI_ROOT_NAMESPACE {
 				delete bundle;
 				return false;
 			}
-			// can_return_early=true: no buffer to protect, safe to
-			// return early on timeout.
+
 			const bool on_time = uv_wait_fs_with_deadline(
-			                         uv_default_loop(), bundle, deadline_ms, true);
-			if (!bundle->state.done)
-			{
-				// returned_early: callback will delete bundle.
-				return false;
-			}
+			                         uv_default_loop(), bundle, deadline_ms);
 			const bool ok = bundle->state.result >= 0;
 			delete bundle;
 			if (ok)

@@ -107,7 +107,7 @@ jobs:
           CS_DEV_PATH: ${{ github.workspace }}/covscript/csdev
         run: |
           mkdir -p cmake-build/unix
-          cmake -G "Unix Makefiles" -S . -B cmake-build/unix
+          cmake -G "Unix Makefiles" -S . -B cmake-build/unix -DPROCESS_BUILD_TESTING=ON
           cmake --build cmake-build/unix --parallel 4
           mkdir -p build/imports
           cp cmake-build/unix/*.cse build/imports/
@@ -122,7 +122,7 @@ jobs:
           set CS_DEV_PATH=${{ github.workspace }}\covscript\csdev
           if not exist cmake-build\mingw-w64 mkdir cmake-build\mingw-w64
           cd cmake-build\mingw-w64
-          cmake -G "MinGW Makefiles" ..\..
+          cmake -G "MinGW Makefiles" ..\.. -DPROCESS_BUILD_TESTING=ON
           cmake --build . --parallel 4
           cd ..\..
           if not exist build\imports mkdir build\imports
@@ -167,4 +167,25 @@ jobs:
           & $cs -i build\imports tests\test_fiber.csc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $cs -i build\imports tests\test_corner.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # ------------------------------------------------------------------ #
+      # 7a. Run C++ UV wrapper tests (Linux / macOS)                       #
+      # ------------------------------------------------------------------ #
+      - name: Run C++ tests
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          rm -f .tmp_cpptest_*.txt
+          cmake-build/unix/test_uv_fs
+
+      # ------------------------------------------------------------------ #
+      # 7b. Run C++ UV wrapper tests (Windows)                             #
+      # ------------------------------------------------------------------ #
+      - name: Run C++ tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -ErrorAction SilentlyContinue .tmp_cpptest_*.txt
+          & cmake-build\mingw-w64\test_uv_fs.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -102,3 +102,30 @@ target_link_libraries(process
 set_target_properties(process PROPERTIES OUTPUT_NAME process)
 set_target_properties(process PROPERTIES PREFIX "")
 set_target_properties(process PROPERTIES SUFFIX ".cse")
+
+# ---------------------------------------------------------------------------
+# C++ unit tests for UV wrappers (exercise paths unreachable from scripts)
+# ---------------------------------------------------------------------------
+option(PROCESS_BUILD_TESTING "Build C++ unit tests for the UV async I/O wrappers" OFF)
+
+if (PROCESS_BUILD_TESTING)
+    enable_testing()
+
+    add_executable(test_uv_fs tests/cpp/test_uv_fs.cpp)
+
+    target_include_directories(test_uv_fs
+        PRIVATE
+            third_party/libuv/include
+    )
+
+    if (MINGW)
+        target_compile_definitions(test_uv_fs PRIVATE WIN32_LEAN_AND_MEAN)
+    endif ()
+
+    target_link_libraries(test_uv_fs
+        PRIVATE
+            uv_a
+    )
+
+    add_test(NAME test_uv_fs COMMAND test_uv_fs)
+endif ()
