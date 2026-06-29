@@ -21,7 +21,9 @@ var r2 = p.start().communicate()
 
 ## 兼容性
 
-Process Extension 的 CNI 接口向后兼容：旧有接口全部保留，签名与语义保持不变；仅新增能力。
+Process Extension 的 **CNI 脚本层接口**向后兼容：旧有接口全部保留，签名与语义保持不变；仅新增能力。
+
+> **实现层说明**：上述向后兼容适用于 CovScript 脚本层（CNI surface）。底层 C++ `mpp` 库实现（`mozart++/process`、`mozart++/file`）已重构：原有的同步 I/O 路径（`read_at` / `write_bytes` / `flush_file` 等）已移除，统一迁移至 libuv 异步 I/O；进程等待内部也由 `begin_wait()` / `poll_wait()` / `collect_wait()` 异步模式替代旧的直接阻塞 `wait_for()`。这些 C++ 层内部变更不影响 CNI 脚本接口的兼容性——所有旧有 CNI 方法与签名均保留，上层脚本无需修改。
 
 | 类别 | Legacy 接口 | Modern 新增 |
 |------|-------------|-------------|
