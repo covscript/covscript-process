@@ -36,17 +36,9 @@ function check_null(label, v)
 end
 
 
-function shell_prog()
-    if system.is_platform_windows()
-        return "cmd"
-    else
-        return "/bin/sh"
-    end
-end
-
 function enable_shell(b)
     try
-        b.shell(shell_prog())
+        b.shell(process.default_shell())
         return true
     catch _e1
     end

@@ -38,17 +38,9 @@ function check_not_null(label, v)
     check(label, v != null)
 end
 
-function default_shell()
-    if system.is_platform_windows()
-        return "cmd"
-    else
-        return "/bin/sh"
-    end
-end
-
 function enable_shell(b)
     try
-        b.shell(default_shell())
+        b.shell(process.default_shell())
         return true
     catch _e1
     end
@@ -68,10 +60,10 @@ function start_sleeper(seconds)
     var b = new process.builder
     if system.is_platform_windows()
         b.cmd("ping -n " + (seconds + 1) + " 127.0.0.1 >nul")
-        b.shell(default_shell())
+        b.shell(process.default_shell())
     else
         b.cmd("sleep " + seconds)
-        b.shell(default_shell())
+        b.shell(process.default_shell())
     end
     return b.start()
 end
@@ -232,7 +224,7 @@ end
 section("C07b builder method chaining")
 try
     var b07b = new process.builder
-    b07b.cmd("echo chained").shell(default_shell()).merge_output(true)
+    b07b.cmd("echo chained").shell(process.default_shell()).merge_output(true)
     var p07b = b07b.start()
     var r07b = p07b.communicate()
     check_eq("C07b builder exit code", r07b[2], 0)
@@ -323,7 +315,7 @@ try
     var fout = process.async.fstream(outpath, "w+")
 
     var b12 = new process.builder
-    b12.shell(default_shell()).cmd("echo").arg({"c12_redirected_stdout"}).redirect_out(fout)
+    b12.shell(process.default_shell()).cmd("echo").arg({"c12_redirected_stdout"}).redirect_out(fout)
     var p12 = b12.start()
     p12.wait()
     fout.close()
@@ -1195,8 +1187,8 @@ try
     b57b.cmd("echo modified")
     b57b.env("CSPROC_C57", "mod_value")
     # Original builder should still have its own settings
-    b57a.shell(default_shell())
-    b57b.shell(default_shell())
+    b57a.shell(process.default_shell())
+    b57b.shell(process.default_shell())
     var r57a = b57a.start().communicate()
     var r57b = b57b.start().communicate()
     check_eq("original exit 0", r57a[2], 0)

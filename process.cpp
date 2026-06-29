@@ -143,6 +143,17 @@ using process_t = std::shared_ptr<mpp::process>;
 using builder_t = mpp::process_builder;
 using file_t = mpp::file_ptr;
 
+static std::string get_default_shell()
+{
+#ifdef MOZART_PLATFORM_WIN32
+	const char *shell = std::getenv("COMSPEC");
+	return shell ? shell : "cmd";
+#else
+	const char *shell = std::getenv("SHELL");
+	return shell ? shell : "/bin/sh";
+#endif
+}
+
 CNI_ROOT_NAMESPACE {
 	CNI_V(exec, [](const std::string &cmd, const cs::array &args)
 	{
@@ -152,15 +163,16 @@ CNI_ROOT_NAMESPACE {
 		return std::make_shared<mpp::process>(mpp::process::exec(cmd, arr));
 	})
 
+	CNI_V(default_shell, []() -> std::string
+	{
+		return get_default_shell();
+	})
+
 	CNI_V(shell, [](const std::string &command)
 	{
 		builder_t b;
 		b.command(command);
-#ifdef MOZART_PLATFORM_WIN32
-		b.shell("cmd");
-#else
-		b.shell("/bin/sh");
-#endif
+		b.shell(get_default_shell());
 		return std::make_shared<mpp::process>(b.start());
 	})
 

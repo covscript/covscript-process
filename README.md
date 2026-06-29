@@ -1,4 +1,4 @@
-# covscript-process
+# CovScript Process Extension
 
 CovScript 的进程扩展，基于 Mozart++ 封装跨平台的子进程创建、等待、管道、输出采集与异步文件 I/O 能力。
 
@@ -21,7 +21,7 @@ import process
 
 var b = new process.builder
 b.cmd("echo hello")
-b.shell("cmd") # Linux/macOS 用 "/bin/sh"
+b.shell(process.default_shell())
 var p = b.start()
 system.out.println(p.wait())
 ```
@@ -30,7 +30,8 @@ system.out.println(p.wait())
 
 - `process.builder` 是类型，不是工厂函数
 - 应使用 `new process.builder` 创建实例
-- `shell(program)`：传入 shell 程序路径（如 `cmd` 或 `/bin/sh`）启用 shell 模式
+- `shell(program)`：传入 shell 程序路径启用 shell 模式
+- `process.default_shell()`：返回系统默认 shell（Unix: `$SHELL`，Windows: `%COMSPEC%`）
 - `arg()` 可多次调用，后写覆盖（last-wins）
 
 ### 快捷 shell 启动
@@ -40,8 +41,18 @@ import process
 
 var b = new process.builder
 b.cmd("echo shell_ok")
-b.shell("cmd") # Linux/macOS 用 "/bin/sh"
+b.shell(process.default_shell())
 var p = b.start()
+var r = p.communicate()
+system.out.println(r[0])
+```
+
+或者使用快捷函数：
+
+```covscript
+import process
+
+var p = process.shell("echo shell_ok")
 var r = p.communicate()
 system.out.println(r[0])
 ```
@@ -55,6 +66,8 @@ system.out.println(r[0])
 | `wait()` / `communicate()` | 普通上下文：内核阻塞并挂起当前 OS 线程；fiber 上下文：提交到 libuv 线程池并协作 yield，不阻塞同线程其他 fiber |
 | `wait_poll(timeout, interval)` | 在 CNI 层按 `interval` 轮询。若 SDK 支持 fiber 且当前正运行在 fiber 中，则自动调用 `cs::fiber::yield()` 让出执行权；否则 `sleep_for(interval)` |
 | `wait_with(timeout, callback)` | 同样按超时窗口轮询，但每轮迭代调用 `callback()` 替代 yield/sleep。把宿主框架自己的调度原语（事件循环 tick、`runtime.delay`、自定义 fiber yield 等）传进来即可无侵入嵌入 |
+
+`callback` 签名：`() -> void`，无参数、无返回值。每轮轮询调用一次，仅用于驱动宿主框架的调度逻辑。
 
 ```covscript
 # 1) 默认即可：纯脚本场景。在 fiber 中会自动让步
@@ -77,7 +90,7 @@ import process
 var f = process.async.fstream("./out.txt", "w")
 var b = new process.builder
 b.cmd("echo redirected")
-b.shell("cmd") # Linux/macOS 用 "/bin/sh"
+b.shell(process.default_shell())
 b.redirect_out(f)
 var p = b.start()
 p.wait()
@@ -87,10 +100,7 @@ f.close()
 
 ## Build
 
-项目依赖 CovScript SDK，通过环境变量 `CS_DEV_PATH` 提供：
-
-- Windows: 指向本地 CovScript SDK 根目录，例如 `D:/.../covscript/csdev`
-- Linux: 指向已安装 SDK 根目录，例如 `/usr/share/covscript`
+- 项目依赖 CovScript SDK，通过环境变量 `CS_DEV_PATH` 提供
 - 初始化 git 子模块: `git submodule update --init --recursive`
 
 ### Windows (MinGW)
@@ -113,13 +123,12 @@ cmake --build . -- -j4
 
 ### 解释器基线
 
-- 当前解释器 ABI：`COVSCRIPT_ABI_VERSION = 260602`（v3.4.8）
-- 本扩展 fiber 协作分支门槛是 ABI `>= 250908`，因此在当前解释器上默认启用 fiber 兼容路径
+- 本扩展 fiber 协作分支门槛是 ABI `>= 250908`
 - 构建标准来自 SDK 的 `csbuild.cmake`（当前为 C++17）
 
 ## Test
 
-CI 运行以下全部测试套件（Windows 使用 `cs.exe`，Linux/macOS 使用 `cs`）：
+CI 运行以下全部测试套件：
 
 ```bash
 cs -i ./build/imports tests/test_unit.csc
@@ -149,8 +158,6 @@ cs -i ./build/imports tests/test_corner.csc
 ## Known Constraints
 
 - `builder.shell(...)` 内部会把 `cmd()` + `arg()` 拼接成一条 shell 命令串，shell 元字符会被重新解释；需要精确参数语义时，直接使用 `cmd()` + `arg()` 而不调用 `shell()`
-
-- 兼容提示：请统一通过 `import process` 使用本扩展，避免与解释器内置 `process` 冲突。
 - 非 shell 模式（直接 `cmd()` + `arg()`，不调用 `shell()`）下，Windows 按 MSVCRT 标准规则转义参数；Unix 端 fork+exec 直接接收 argv
 
 ## 完整 API

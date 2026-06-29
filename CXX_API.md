@@ -1,4 +1,4 @@
-# CovScript Process Extension — C++ API (Mozart++)
+# CovScript Process Extension: C++ API (Mozart++)
 
 C++ mpp 库层接口文档。脚本层 CNI API 见 [CNI_API.md](CNI_API.md)。
 
