@@ -1,9 +1,16 @@
 /**
- * Mozart++ Template Library
+ * Mozart++ Template Library — forked from
+ *   Chengdu Covariant Technologies Co., LTD. (2020-2021)
+ *   https://covariant.cn/
+ *   https://github.com/chengdu-zhirui/
+ *
  * Licensed under Apache 2.0
- * Copyright (C) 2020-2021 Chengdu Covariant Technologies Co., LTD.
- * Website: https://covariant.cn/
- * Github:  https://github.com/chengdu-zhirui/
+ *
+ * Copyright (C) 2017-2026 Michael Lee(李登淳)
+ *
+ * Email:   mikecovlee@163.com
+ * Github:  https://github.com/mikecovlee
+ * Website: http://covscript.org.cn
  */
 #pragma once
 
@@ -29,9 +36,11 @@ namespace mpp {
 
 		/**
 		 * Mark the underlying fd as no longer valid so that subsequent
-		 * writes are silently discarded instead of writing to a closed
-		 * or stale handle (which could be unsafe on Windows if the
-		 * handle value has been reused by the OS).
+		 * writes are safely refused instead of writing to a closed or
+		 * stale handle (which could be unsafe on Windows if the handle
+		 * value has been reused by the OS).  After invalidation,
+		 * overflow() returns EOF and xsputn() returns 0, which causes
+		 * the owning std::ostream to set failbit / badbit.
 		 */
 		void invalidate()
 		{
@@ -92,7 +101,9 @@ namespace mpp {
 
 		/**
 		 * Mark the underlying fd as no longer valid.  After this call,
-		 * writes to the stream are silently discarded.
+		 * writes to the stream are safely refused (the underlying
+		 * streambuf returns EOF / 0, which causes the stream to set
+		 * failbit / badbit).
 		 */
 		void invalidate()
 		{

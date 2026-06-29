@@ -316,7 +316,9 @@ namespace mpp {
 			if (_this->_info._stdin_closed) return;
 			_this->_info._stdin_closed = true;
 			// Invalidate the stream buffer so subsequent writes are
-			// silently discarded instead of hitting a stale/closed fd.
+			// safely refused instead of hitting a stale/closed fd
+			// (the underlying streambuf returns EOF / 0, which sets
+			// the stream's failbit / badbit).
 			_this->_stdin.invalidate();
 			if (_this->_info._stdin != FD_INVALID) {
 				mpp_impl::close_fd(_this->_info._stdin);

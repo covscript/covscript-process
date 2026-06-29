@@ -1,20 +1,25 @@
 /**
+ * Covariant Script Libmozart++ Process Support
+ *
  * C++ unit tests for the libuv async filesystem wrappers in process.cpp.
  *
- * These tests exercise code paths that are difficult or impossible to
- * reach from CovScript scripts:
- *   - deadline < 0 (infinite wait)
- *   - deadline = 0 (immediate timeout probe)
- *   - Cancel via stdin read with short deadline
- *   - buf_size > UINT_MAX rejection
- *   - Rapid create/destroy cycles (leak detection)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The structs and functions tested here mirror those in process.cpp;
- * they are duplicated so the test can link against libuv without
- * depending on the CovScript CNI layer or the mozart library.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Build: part of the main CMakeLists.txt (target test_uv_fs).
- * Run:   ./test_uv_fs
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Copyright (C) 2017-2026 Michael Lee(李登淳)
+ *
+ * Email:   mikecovlee@163.com
+ * Github:  https://github.com/mikecovlee
+ * Website: http://covscript.org.cn
  */
 
 #include <uv.h>

@@ -1,9 +1,16 @@
 /**
- * Mozart++ Template Library: System/IO
+ * Mozart++ Template Library: System/IO — forked from
+ *   Chengdu Covariant Technologies Co., LTD. (2020-2021)
+ *   https://covariant.cn/
+ *   https://github.com/chengdu-zhirui/
+ *
  * Licensed under Apache 2.0
- * Copyright (C) 2020-2021 Chengdu Covariant Technologies Co., LTD.
- * Website: https://covariant.cn/
- * Github:  https://github.com/chengdu-zhirui/
+ *
+ * Copyright (C) 2017-2026 Michael Lee(李登淳)
+ *
+ * Email:   mikecovlee@163.com
+ * Github:  https://github.com/mikecovlee
+ * Website: http://covscript.org.cn
  */
 #pragma once
 
@@ -48,8 +55,12 @@ namespace mpp {
 
 	static mpp::ssize_t read(fd_type handle, void *buf, size_t count)
 	{
+		// ReadFile accepts DWORD (32-bit).  Reject oversized requests
+		// instead of silently clamping — callers must chunk large I/O.
+		if (count > MAXDWORD)
+			return -1;
 		DWORD dwRead;
-		if (ReadFile(handle, buf, count, &dwRead, nullptr)) {
+		if (ReadFile(handle, buf, static_cast<DWORD>(count), &dwRead, nullptr)) {
 			return dwRead;
 		}
 		else {
@@ -61,8 +72,12 @@ namespace mpp {
 
 	static mpp::ssize_t write(fd_type handle, const void *buf, size_t count)
 	{
+		// WriteFile accepts DWORD (32-bit).  Reject oversized requests
+		// instead of silently clamping — callers must chunk large I/O.
+		if (count > MAXDWORD)
+			return -1;
 		DWORD dwWritten;
-		if (WriteFile(handle, buf, count, &dwWritten, nullptr)) {
+		if (WriteFile(handle, buf, static_cast<DWORD>(count), &dwWritten, nullptr)) {
 			return dwWritten;
 		}
 		else {

@@ -25,6 +25,34 @@
 #include <memory>
 
 namespace mpp_impl {
+
+	// Ensure a HANDLE has HANDLE_FLAG_INHERIT set so it can be passed to a
+	// child process via STARTUPINFO.hStd* with bInheritHandles=TRUE.
+	// If the handle is NULL/INVALID_HANDLE_VALUE this is a no-op (the child
+	// will have no corresponding std handle, which is the best-effort fallback).
+	static void ensure_handle_inheritable(HANDLE h, const char *name)
+	{
+		if (h == nullptr || h == INVALID_HANDLE_VALUE)
+			return;
+		DWORD flags = 0;
+		if (!GetHandleInformation(h, &flags)) {
+			auto le = GetLastError();
+			std::string msg = "unable to query handle info on ";
+			msg += name;
+			msg += " (err=" + std::to_string(le) + ")";
+			mpp::throw_ex<mpp::runtime_error>(msg);
+		}
+		if (!(flags & HANDLE_FLAG_INHERIT)) {
+			if (!SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+				auto le = GetLastError();
+				std::string msg = "unable to make ";
+				msg += name;
+				msg += " inheritable (err=" + std::to_string(le) + ")";
+				mpp::throw_ex<mpp::runtime_error>(msg);
+			}
+		}
+	}
+
 	void create_process_impl(const process_startup &startup,
 	                         process_info &info,
 	                         fd_type *pstdin, fd_type *pstdout, fd_type *pstderr)
@@ -39,7 +67,9 @@ namespace mpp_impl {
 		// stdin: either inherit from parent terminal, redirect from a file handle,
 		// or use a pipe.
 		if (startup.inherit_stdin) {
-			si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+			HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+			ensure_handle_inheritable(h, "stdin");
+			si.hStdInput = h;
 		}
 		else if (startup._stdin.redirected()) {
 			// Redirected: PIPE_READ == PIPE_WRITE == the file handle.
@@ -74,7 +104,9 @@ namespace mpp_impl {
 
 		// stdout: inherit from parent terminal, redirect to a file handle, or use a pipe.
 		if (startup.inherit_stdout) {
-			si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+			HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+			ensure_handle_inheritable(h, "stdout");
+			si.hStdOutput = h;
 		}
 		else if (startup._stdout.redirected()) {
 			// Redirected: PIPE_WRITE == the file handle.
@@ -114,7 +146,9 @@ namespace mpp_impl {
 			si.hStdError = si.hStdOutput;
 		}
 		else if (startup.inherit_stderr) {
-			si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+			HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+			ensure_handle_inheritable(h, "stderr");
+			si.hStdError = h;
 		}
 		else if (startup._stderr.redirected()) {
 			// Redirected: PIPE_WRITE == the file handle.
