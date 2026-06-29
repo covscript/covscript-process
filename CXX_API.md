@@ -193,7 +193,9 @@ Builder 模式配置进程启动参数。所有 setter 返回 `process_builder&`
 | `directory` | `(const std::string& cwd) -> process_builder&` | 设置工作目录 |
 | `merge_outputs` | `(bool) -> process_builder&` | 合并 stderr 到 stdout |
 | `inherit_stdin` | `(bool = true) -> process_builder&` | 继承父进程 stdin |
-| `inherit_output` | `(bool = true) -> process_builder&` | 继承父进程 stdout+stderr |
+| `inherit_stdout` | `(bool = true) -> process_builder&` | 继承父进程 stdout |
+| `inherit_stderr` | `(bool = true) -> process_builder&` | 继承父进程 stderr |
+| `inherit_output` | `(bool = true) -> process_builder&` | 便捷方法：同时设置 `inherit_stdout` 和 `inherit_stderr` |
 | `inherit_env` | `(bool = true) -> process_builder&` | 继承父进程环境 |
 | `redirect_stdin` | `(fd_type) -> process_builder&` | 重定向 stdin |
 | `redirect_stdout` | `(fd_type) -> process_builder&` | 重定向 stdout |
@@ -241,12 +243,13 @@ struct process_startup {
 
 ```cpp
 struct process_info {
-    fd_type _tid;           // 线程句柄（仅 Windows）
-    fd_type _pid;           // 进程句柄（Windows）或 PID（Unix）
-    fd_type _stdin;         // stdin 管道写端
-    fd_type _stdout;        // stdout 管道读端
-    fd_type _stderr;        // stderr 管道读端
-    bool _stdin_closed;     // stdin 是否已关闭
+    fd_type _tid = FD_INVALID;      // 线程句柄（仅 Windows，Unix 始终 FD_INVALID）
+    fd_type _pid = FD_INVALID;      // 进程句柄（Windows）或 PID（Unix）
+    fd_type _stdin = FD_INVALID;    // stdin 管道写端
+    fd_type _stdout = FD_INVALID;   // stdout 管道读端
+    fd_type _stderr = FD_INVALID;   // stderr 管道读端
+    bool _stdin_closed = false;     // stdin 是否已关闭
+    uint64_t _start_time = 0;       // 进程启动时间戳（PID 复用检测，0 表示未记录）
 };
 ```
 
