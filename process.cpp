@@ -216,13 +216,19 @@ CNI_ROOT_NAMESPACE {
 				return cs::null_pointer;
 			}
 
-			uv_wait_fs_with_deadline(
-			    uv_default_loop(), bundle, deadline_ms);
+			const bool on_time = uv_wait_fs_with_deadline(
+			                         uv_default_loop(), bundle, deadline_ms);
 			const int n = bundle->state.result;
 			delete bundle;
 			if (n > 0)
 			{
 				f->advance_read(n);
+				// Data was read, but if the deadline had already been
+				// exceeded the caller should receive null per the documented
+				// timeout semantics.  The read position is still advanced so
+				// that internal offsets stay consistent.
+				if (!on_time)
+					return cs::null_pointer;
 				return cs::var::make<std::string>(std::string(buf.data(), n));
 			}
 			// n == 0: EOF — return empty string even if the deadline was
@@ -295,6 +301,12 @@ CNI_ROOT_NAMESPACE {
 			{
 				if (!f->is_append())
 					f->advance_write(result);
+				// The OS write completed, but if the deadline was exceeded
+				// the caller should receive -1 per the documented timeout
+				// semantics.  The write position is still advanced so that
+				// internal offsets stay consistent.
+				if (!on_time)
+					return -1;
 				return result;
 			}
 			if (!on_time)
@@ -332,11 +344,10 @@ CNI_ROOT_NAMESPACE {
 			                         uv_default_loop(), bundle, deadline_ms);
 			const bool ok = bundle->state.result >= 0;
 			delete bundle;
-			if (ok)
-				return true;
-			if (!on_time)
-				return false;
-			return false;
+			// Return true only when fsync succeeded AND completed before
+			// the deadline.  When deadline_ms < 0 (no deadline), on_time
+			// is always true, so this reduces to `ok`.
+			return ok && on_time;
 		})
 	}
 

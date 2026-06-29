@@ -40,7 +40,7 @@
 #define platform_sleep(ms) Sleep(ms)
 #define O_RDWR_CREATE (_O_RDWR | _O_CREAT | _O_TRUNC | _O_BINARY)
 #define O_RDONLY_BIN (_O_RDONLY | _O_BINARY)
-#define PERM_MODE 0
+#define PERM_MODE (_S_IREAD | _S_IWRITE)
 #else
 #include <fcntl.h>
 #include <unistd.h>
@@ -661,8 +661,25 @@ static void test_invalid_fd()
 // ============================================================================
 // main
 // ============================================================================
+static void cleanup_temp_files()
+{
+	// Remove leftover temp files from previous runs.  On Windows, files
+	// created by a crashed run may be read-only, which blocks O_TRUNC.
+	for (int i = 1; i <= 20; ++i) {
+		char buf[128];
+		std::snprintf(buf, sizeof(buf), "./.tmp_cpptest_t%02d.txt", i);
+#ifdef _WIN32
+		// Strip read-only attribute so _unlink can succeed.
+		SetFileAttributesA(buf, FILE_ATTRIBUTE_NORMAL);
+#endif
+		platform_unlink(buf);
+	}
+}
+
 int main()
 {
+	cleanup_temp_files();
+
 	std::printf("\n=== C++ UV Filesystem Wrapper Tests ===\n\n");
 
 	// Callback lifecycle
