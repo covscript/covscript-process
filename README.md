@@ -1,2 +1,166 @@
-# Process Extension for CovScript
-Implemented under Mozart++(LibMozart) System Module
+# CovScript Process Extension
+
+CovScript 的进程扩展，基于 Mozart++ 封装跨平台的子进程创建、等待、管道、输出采集与异步文件 I/O 能力。
+
+## Features
+
+- `process.exec(command, args)` 直接启动子进程
+- `new process.builder` 构造可复用的进程配置对象
+- `wait()` / `try_wait()` / `wait_poll()` / `wait_with()` 等待进程结束
+- `communicate()` 同时收集 stdout / stderr，避免单管道阻塞
+- `get_pid()` / `kill()` 进程控制
+- `process.async` 事件循环能力（`poll`/`poll_once`/`stop`/`restart`）
+- `process.async.fstream()` 与 `file_t`：异步文件 I/O 与 `redirect_out`/`redirect_err` 组合使用
+
+## API Notes
+
+当前稳定的脚本侧构造方式：
+
+```covscript
+import process
+
+var b = new process.builder
+b.cmd("echo hello")
+b.shell(process.default_shell())
+var p = b.start()
+system.out.println(p.wait())
+```
+
+注意：
+
+- `process.builder` 是类型，不是工厂函数
+- 应使用 `new process.builder` 创建实例
+- `shell(program)`：传入 shell 程序路径启用 shell 模式
+- `process.default_shell()`：返回系统默认 shell（Unix: `$SHELL`，Windows: `%COMSPEC%`）
+- `arg()` 可多次调用，后写覆盖（last-wins）
+
+### 快捷 shell 启动
+
+```covscript
+import process
+
+var b = new process.builder
+b.cmd("echo shell_ok")
+b.shell(process.default_shell())
+var p = b.start()
+var r = p.communicate()
+system.out.println(r[0])
+```
+
+或者使用快捷函数：
+
+```covscript
+import process
+
+var p = process.shell("echo shell_ok")
+var r = p.communicate()
+system.out.println(r[0])
+```
+
+### 协程 / 框架兼容
+
+等待 API 提供三档语义，按需选择：
+
+| API | 阻塞行为 |
+|---|---|
+| `wait()` / `communicate()` | 普通上下文：内核阻塞并挂起当前 OS 线程；fiber 上下文：提交到 libuv 线程池并协作 yield，不阻塞同线程其他 fiber |
+| `wait_poll(timeout, interval)` | 在 CNI 层按 `interval` 轮询。若 SDK 支持 fiber 且当前正运行在 fiber 中，则自动调用 `cs::fiber::yield()` 让出执行权；否则 `sleep_for(interval)` |
+| `wait_with(timeout, callback)` | 同样按超时窗口轮询，但每轮迭代调用 `callback()` 替代 yield/sleep。把宿主框架自己的调度原语（事件循环 tick、`runtime.delay`、自定义 fiber yield 等）传进来即可无侵入嵌入 |
+
+`callback` 签名：`() -> void`，无参数、无返回值。每轮轮询调用一次，仅用于驱动宿主框架的调度逻辑。
+
+```covscript
+# 1) 默认即可：纯脚本场景。在 fiber 中会自动让步
+var code = p.wait_poll(5000, 5)
+
+# 2) 嵌入到外部异步框架：每次轮询时驱动一次框架的事件循环
+function my_tick()
+    # 例如：runtime.delay(1)；或调用框架的 schedule_yield()；或推进 reactor
+end
+var code2 = p.wait_with(5000, my_tick)
+```
+
+注意：`wait_with` 的回调内 **必须**自己负责让步或 sleep；空回调（如纯递增计数）会让 CNI 层退化成 100% CPU 忙等。
+
+### `process.async` 与 `file_t`
+
+```covscript
+import process
+
+var f = process.async.fstream("./out.txt", "w")
+var b = new process.builder
+b.cmd("echo redirected")
+b.shell(process.default_shell())
+b.redirect_out(f)
+var p = b.start()
+p.wait()
+f.flush(1000)
+f.close()
+```
+
+## Build
+
+- 项目依赖 CovScript SDK，通过环境变量 `CS_DEV_PATH` 提供
+- 初始化 git 子模块: `git submodule update --init --recursive`
+
+### Windows (MinGW)
+
+```powershell
+mkdir cmake-build\mingw-w64
+cd cmake-build\mingw-w64
+cmake ..\..
+mingw32-make -j4
+```
+
+### Linux / WSL
+
+```bash
+mkdir -p cmake-build/linux
+cd cmake-build/linux
+CS_DEV_PATH=/usr/share/covscript cmake ../..
+cmake --build . -- -j4
+```
+
+### 解释器基线
+
+- 本扩展 fiber 协作分支门槛是 ABI `>= 250908`
+- 构建标准来自 SDK 的 `csbuild.cmake`（当前为 C++17）
+
+## Test
+
+CI 运行以下全部测试套件：
+
+```bash
+cs -i ./build/imports tests/test_unit.csc
+cs -i ./build/imports tests/test_async.csc
+cs -i ./build/imports tests/test_file_redirect.csc
+cs -i ./build/imports tests/test_stream.csc
+cs -i ./build/imports tests/test_fiber.csc
+cs -i ./build/imports tests/test_corner.csc
+```
+
+## Project Layout
+
+- `process.cpp`：CovScript CNI 绑定层
+- `src/process.cpp`：平台无关的进程创建胶水层
+- `src/process_win32.cpp`：Windows 进程实现
+- `src/process_unix.cpp`：Unix / Linux 进程实现
+- `src/process_win32_wait.cpp` / `src/process_unix_wait.cpp`：平台等待/终止实现
+- `include/mozart++/mpp_system/process.hpp`：公共 API 与 builder / process 类型定义
+- `include/mozart++/mpp_system/file.hpp`：跨平台文件句柄封装
+- `tests/test_unit.csc`：主回归测试（T01-T37）
+- `tests/test_async.csc`：事件循环与异步文件 I/O（A01-A05）
+- `tests/test_file_redirect.csc`：file_t 重定向（R01-R02）
+- `tests/test_stream.csc`：file_t stream 访问器（S01-S10）
+- `tests/test_fiber.csc`：协程协作路径（F01-F06）
+- `tests/test_corner.csc`：边界情况测试（C01-C34）
+
+## Known Constraints
+
+- `builder.shell(...)` 内部会把 `cmd()` + `arg()` 拼接成一条 shell 命令串，shell 元字符会被重新解释；需要精确参数语义时，直接使用 `cmd()` + `arg()` 而不调用 `shell()`
+- 非 shell 模式（直接 `cmd()` + `arg()`，不调用 `shell()`）下，Windows 按 MSVCRT 标准规则转义参数；Unix 端 fork+exec 直接接收 argv
+
+## 完整 API
+
+- **[CNI_API.md](CNI_API.md)** — CovScript 脚本层接口
+- **[CXX_API.md](CXX_API.md)** — C++ mpp 库层接口

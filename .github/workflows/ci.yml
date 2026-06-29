@@ -1,0 +1,192 @@
+# CI for covscript-process extension.
+#
+# Matrix: 3 platforms × 2 covscript channels (release + nightly) = 6 jobs.
+#
+# Each job:
+#   1. Checks out this extension repo.
+#   2. Determines the covscript ref (tag from covscript/csbuild/release.txt on master, or master HEAD).
+#   3. Builds covscript from source (SDK ends up in covscript/csdev/).
+#   4. Builds the extension against that SDK.
+#   5. Runs all test suites.
+#
+# Windows uses MinGW-w64 (matching local development practice).
+# Linux and macOS use Unix Makefiles with the system toolchain.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: "${{ matrix.os }} / ${{ matrix.cs-channel }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+        cs-channel: [release, nightly]
+
+    steps:
+      # ------------------------------------------------------------------ #
+      # 1. Check out this extension repo                                    #
+      # ------------------------------------------------------------------ #
+      - name: Checkout extension
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ------------------------------------------------------------------ #
+      # 2. Determine covscript checkout ref                                 #
+      #    release → tag read from covscript/csbuild/release.txt (master)  #
+      #    nightly → master HEAD                                            #
+      # ------------------------------------------------------------------ #
+      - name: Determine covscript ref
+        id: cs-ref
+        shell: bash
+        run: |
+          if [ "${{ matrix.cs-channel }}" = "release" ]; then
+            tag=$(curl -fsSL https://raw.githubusercontent.com/covscript/covscript/master/csbuild/release.txt | tr -d '[:space:]')
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ------------------------------------------------------------------ #
+      # 3. Check out covscript at the resolved ref                         #
+      # ------------------------------------------------------------------ #
+      - name: Checkout covscript (${{ steps.cs-ref.outputs.ref }})
+        uses: actions/checkout@v4
+        with:
+          repository: covscript/covscript
+          ref: ${{ steps.cs-ref.outputs.ref }}
+          path: covscript
+          submodules: recursive
+
+      # ------------------------------------------------------------------ #
+      # 4a. Add MinGW-w64 to PATH (Windows only)                           #
+      #     Must come before any cmake invocation so gcc/g++ are found.    #
+      # ------------------------------------------------------------------ #
+      - name: Add MinGW to PATH
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "C:/mingw64/bin" >> "$GITHUB_PATH"
+
+      # ------------------------------------------------------------------ #
+      # 4b. Build covscript (Linux / macOS)                                #
+      #     make.sh creates:  covscript/build/bin/cs                       #
+      #                       covscript/csdev/  (SDK headers + libs)       #
+      # ------------------------------------------------------------------ #
+      - name: Build covscript
+        if: runner.os != 'Windows'
+        working-directory: covscript
+        shell: bash
+        run: bash csbuild/make.sh
+
+      # ------------------------------------------------------------------ #
+      # 4c. Build covscript (Windows / MinGW)                              #
+      #     make.bat creates:  covscript\build\bin\cs.exe                  #
+      #                        covscript\csdev\  (SDK headers + libs)      #
+      # ------------------------------------------------------------------ #
+      - name: Build covscript (Windows)
+        if: runner.os == 'Windows'
+        working-directory: covscript
+        shell: cmd
+        run: csbuild\make.bat
+
+      # ------------------------------------------------------------------ #
+      # 5a. Build extension (Linux / macOS)                                #
+      # ------------------------------------------------------------------ #
+      - name: Build extension
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CS_DEV_PATH: ${{ github.workspace }}/covscript/csdev
+        run: |
+          mkdir -p cmake-build/unix
+          cmake -G "Unix Makefiles" -S . -B cmake-build/unix -DPROCESS_BUILD_TESTING=ON
+          cmake --build cmake-build/unix --parallel 4
+          mkdir -p build/imports
+          cp cmake-build/unix/*.cse build/imports/
+
+      # ------------------------------------------------------------------ #
+      # 5b. Build extension (Windows / MinGW)                              #
+      # ------------------------------------------------------------------ #
+      - name: Build extension (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          set CS_DEV_PATH=${{ github.workspace }}\covscript\csdev
+          if not exist cmake-build\mingw-w64 mkdir cmake-build\mingw-w64
+          cd cmake-build\mingw-w64
+          cmake -G "MinGW Makefiles" ..\.. -DPROCESS_BUILD_TESTING=ON
+          cmake --build . --parallel 4
+          cd ..\..
+          if not exist build\imports mkdir build\imports
+          copy cmake-build\mingw-w64\*.cse build\imports\
+
+      # ------------------------------------------------------------------ #
+      # 6a. Run tests (Linux / macOS)                                      #
+      # ------------------------------------------------------------------ #
+      - name: Run tests
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -e
+          CS="${{ github.workspace }}/covscript/build/bin/cs"
+          export PATH="${{ github.workspace }}/covscript/build/bin:$PATH"
+          "$CS" -i build/imports tests/test.csc
+          "$CS" -i build/imports tests/test_unit.csc
+          "$CS" -i build/imports tests/test_async.csc
+          "$CS" -i build/imports tests/test_file_redirect.csc
+          "$CS" -i build/imports tests/test_stream.csc
+          "$CS" -i build/imports tests/test_fiber.csc
+          "$CS" -i build/imports tests/test_corner.csc
+
+      # ------------------------------------------------------------------ #
+      # 6b. Run tests (Windows)                                            #
+      # ------------------------------------------------------------------ #
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cs = "${{ github.workspace }}\covscript\build\bin\cs.exe"
+          $env:Path = "${{ github.workspace }}\covscript\build\bin;$env:Path"
+          & $cs -i build\imports tests\test.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_unit.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_async.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_file_redirect.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_stream.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_fiber.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cs -i build\imports tests\test_corner.csc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # ------------------------------------------------------------------ #
+      # 7a. Run C++ UV wrapper tests (Linux / macOS)                       #
+      # ------------------------------------------------------------------ #
+      - name: Run C++ tests
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          rm -f .tmp_cpptest_*.txt
+          cmake-build/unix/test_uv_fs
+
+      # ------------------------------------------------------------------ #
+      # 7b. Run C++ UV wrapper tests (Windows)                             #
+      # ------------------------------------------------------------------ #
+      - name: Run C++ tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -ErrorAction SilentlyContinue .tmp_cpptest_*.txt
+          & cmake-build\mingw-w64\test_uv_fs.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
