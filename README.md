@@ -1,6 +1,6 @@
-# CovScript Process Extension
+# Inter Process Communication Extension for CovScript
 
-CovScript 的进程扩展，基于 Mozart++ 封装跨平台的子进程创建、等待、管道、输出采集与异步文件 I/O 能力。
+CovScript 的 IPC 扩展，基于 Mozart++ 封装跨平台的子进程创建、等待、管道、输出采集与异步文件 I/O 能力。
 
 ## Features
 

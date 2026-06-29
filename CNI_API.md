@@ -1,4 +1,4 @@
-# CovScript Process Extension: CNI API
+# CovScript IPC Extension: CNI API
 
 CovScript 脚本层接口文档。C++ 层 API 见 [CXX_API.md](CXX_API.md)。
 

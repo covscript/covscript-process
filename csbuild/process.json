@@ -1,9 +1,9 @@
 {
     "Type": "Extension",
     "Name": "process",
-    "Info": "Process Extension",
+    "Info": "Inter Process Communication Extension",
     "Author": "CovScript Organization",
-    "Version": "1.0.1",
+    "Version": "2.0.0",
     "Target": "build/imports/process.cse",
     "Dependencies": []
 }
